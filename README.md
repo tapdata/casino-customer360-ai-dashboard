@@ -51,10 +51,10 @@ AI 面板的“发送风险告警”“标记已处理”“发送推荐”会�
 `.env.local` 需要增加：
 
 ```bash
-MONGO_AUDIT_HOST=47.119.130.230:27017
-MONGO_AUDIT_USER=admin
+MONGO_AUDIT_HOST=<mongo-host>:27017
+MONGO_AUDIT_USER=<mongo-user>
 MONGO_AUDIT_PASSWORD=你的密码
-MONGO_AUDIT_AUTH_DB=admin
+MONGO_AUDIT_AUTH_DB=<auth-db>
 MONGO_AUDIT_AUTH_MECHANISM=SCRAM-SHA-256
 MONGO_AUDIT_DB=ai_loyalty_engine
 MONGO_AUDIT_COLLECTION=ai_action_events
