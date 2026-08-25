@@ -1,89 +1,86 @@
-# AI Loyalty Engine Demo — 项目交接上下文
+# AI Loyalty Engine Demo — Project Handoff
 
-最后更新：2026-08-20  
-项目本地路径：`/Users/yangshikun/Documents/ChatGPT/Mogo Demo`
+Last updated: 2026-08-25  
+Local project path: `/Users/yangshikun/Documents/ChatGPT/Mogo Demo`
 
-> 给下一位 AI / 工程师的说明：这是一个用于澳门客户现场 Demo 的本地 AI 面板项目。目标是展示 `Source → TapData CDC / 聚合 → MongoDB → AI 决策面板 → 治理审批 / 通知 / 审计闭环`。请先读本文件，再改代码。
+This document is written for the next engineer or AI assistant who needs to continue the project without replaying the full conversation.
 
-## 1. 一句话业务目标
+## 1. Business objective
 
-在 VIP 仍在桌上的当下，实时识别其价值、行为与需求，及时提供个性化关怀与优惠；并在 AI 推荐之上加一层 Trusted / Governed 治理，确保推荐经过风控、审批、留痕后才触达客户。
+The demo objective is to show how a casino can identify a VIP guest while the guest is still active on the floor, understand the guest's value, behavior, current need, and risk context, then generate a governed next-best-action.
 
-演示重点不是“一个静态看板”，而是：
+The key message is not only “AI recommends an offer.” The stronger story is:
 
-1. TapData 把实时变更同步或聚合到 MongoDB。
-2. AI 面板每 3 秒读取 TapData 发布的 API。
-3. 大盘、桌台热力图、客户 360、AI Chat 看到真实数据变化。
-4. AI 生成下一步建议。
-5. 健康客户走治理审批；风险客户走风险拦截与管理员告警。
-6. 发送 / 审批 / 闭环动作写入 MongoDB 审计库。
+```text
+real-time heterogeneous data
+→ TapData CDC / merge / cleansing
+→ MongoDB MDM collections
+→ TapData published APIs
+→ AI analysis
+→ trusted approval / risk governance
+→ customer outreach
+→ auditable action trail
+```
 
-## 2. 本地启动方式
+The AI panel should make this story visible during a live demo.
 
-进入项目：
+## 2. Local startup
 
 ```bash
 cd "/Users/yangshikun/Documents/ChatGPT/Mogo Demo"
-```
-
-启动：
-
-```bash
 npm run dev
 ```
 
-注意：不要直接运行 `vinext dev`。  
-`npm run dev` 会额外启动两个本地桥：
+Do not run `vinext dev` directly. `npm run dev` starts additional local helper processes:
 
-- OpenAI 本地代理桥：用于本地网络需要代理时访问 GPT。
-- Mongo 审计写入桥：用于把发送、审批、告警闭环动作写入 MongoDB。
+- AI relay for local proxy scenarios.
+- Mongo audit bridge for action persistence.
+- Vinext dev server.
 
-启动成功时，应能看到类似：
+Expected local audit bridge output:
 
 ```text
 Local Mongo audit bridge ready on http://127.0.0.1:8790
 ```
 
-如果页面提示：
+If the UI says the Mongo write bridge is not started, restart with `npm run dev`.
 
-```text
-Mongo 写入桥未启动，请重启 npm run dev
-```
+## 3. Important files
 
-通常表示旧服务没重启，或者不是通过 `npm run dev` 启动。
-
-## 3. 重要文件
-
-| 文件 | 作用 |
+| File | Purpose |
 |---|---|
-| `app/page.tsx` | 旧版/审批工作台主页面，包含客户分析、推荐、发送、风险告警、审计提示 |
-| `app/command-center.tsx` | 新版菜单式 AI 面板：总览、桌台热力图、AI Chat、客户 360、场景工坊、数据模拟器 |
-| `app/api/data/patrons/route.ts` | 服务端读取 TapData API，聚合客户、Session、风险、推荐等数据给前端 |
-| `app/api/ai/chat/route.ts` | GPT / DeepSeek 兼容 AI Chat，使用白名单工具查询 TapData 发布 API |
-| `app/api/audit/events/route.ts` | 前端动作审计 API，转发到本地 Mongo 审计写入桥 |
-| `scripts/dev.mjs` | 本地 dev 启动器，负责启动 AI relay、Mongo audit bridge、vinext dev |
-| `scripts/mongo-audit-bridge.mjs` | Node MongoDB 写入桥，真正使用 MongoDB driver 写审计库 |
-| `.env.local` | 本地真实密钥配置，已存在，不要提交，不要把密钥写到文档 |
-| `.env.example` | 环境变量模板 |
-| `README.md` | 原始项目说明 |
+| `app/page.tsx` | Legacy approval / workbench page with customer analysis, recommendations, sending, risk alerts, and audit hints. |
+| `app/command-center.tsx` | Current menu-based AI panel: overview, table heatmap, AI Chat, Customer 360, Scenario Studio, Data Simulator. |
+| `app/api/data/patrons/route.ts` | Server-side data adapter. Reads TapData APIs and aggregates profiles, sessions, risks, offers, alerts, and table state for the UI. |
+| `app/api/ai/chat/route.ts` | AI Chat route. Supports DeepSeek / OpenAI-compatible calls and whitelisted data-query tools. |
+| `app/api/audit/events/route.ts` | Action audit API. Forwards approval, send, and risk events to the audit bridge. |
+| `app/api/tapdata-collections.ts` | Logical collection names and TapData collection mapping support. |
+| `scripts/dev.mjs` | Development launcher. Starts the local relay, audit bridge, and app server. |
+| `scripts/mongo-audit-bridge.mjs` | Node process that writes audit events to MongoDB using the MongoDB driver. |
+| `.env.local` | Local real credentials. Must not be committed. |
+| `.env.example` | Local environment template. |
+| `.env.cloud.example` | Cloud deployment environment template. |
+| `README.md` | Public project overview. |
 
-## 4. 环境变量与密钥
+## 4. Environment model
 
-真实密钥已经写在 `.env.local`，不要明文复制到其他文档或提交。
+Real secrets are kept in `.env.local` or in cloud deployment environment variables. Do not copy them into Markdown files or source code.
 
-关键变量：
+Representative environment variables:
 
 ```env
-OPENAI_API_KEY=...
-AI_BASE_URL=...
+AI_PROVIDER=deepseek
+AI_MODEL=deepseek-chat
+AI_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=...
 
 TAPDATA_API_BASE_URL=http://<tapdata-api-host>:3080
-TAPDATA_FIND_PATH_TEMPLATE=/api/v2/{collection}/find
+TAPDATA_FIND_PATH_TEMPLATE=/api/v1/{collection}/find
 TAPDATA_TOKEN_URL=http://<tapdata-token-host>:3030/oauth/token
 TAPDATA_CLIENT_ID=...
 TAPDATA_CLIENT_SECRET=...
 TAPDATA_TOKEN_AUTH_METHOD=client_secret_post
-TAPDATA_SCAN_LIMIT=1000
+TAPDATA_SCAN_LIMIT=5000
 
 MONGO_AUDIT_HOST=<mongo-host>:27017
 MONGO_AUDIT_USER=<mongo-user>
@@ -96,24 +93,26 @@ LOCAL_AUDIT_RELAY_PORT=8790
 MONGO_AUDIT_HTTP_URL=http://127.0.0.1:8790
 ```
 
-Mongo 注意点：
+Mongo audit notes:
 
-- 认证机制必须是 `SCRAM-SHA-256`。
-- 已验证真实 Mongo 可写入。
-- 审计库默认：`ai_loyalty_engine`
-- 审计集合默认：`ai_action_events`
-- 本地页面不直接使用 MongoDB driver；通过 `scripts/mongo-audit-bridge.mjs` 写库，避免 Sites / Worker 运行时打包 `mongodb` 时报 `punycode/require` 错误。
+- Authentication mechanism: `SCRAM-SHA-256`.
+- Default audit database: `ai_loyalty_engine`.
+- Default audit collection: `ai_action_events`.
+- The app does not import the MongoDB driver inside the browser-facing bundle.
+- Local audit writes go through `scripts/mongo-audit-bridge.mjs`.
 
-## 5. TapData 已发布 API 的表
+## 5. TapData API model
 
-用户表示 21 张表都已发布 API，路径规则为：
+The current MDM API convention is:
 
 ```text
-POST /api/v2/{collection}/find
-GET  /api/v2/{collection}/
+POST /api/v1/{published_service_name}/find
+GET  /api/v1/{published_service_name}/
 ```
 
-当前核心表：
+The AI panel uses logical collection names internally and maps them to the MDM-published service names through `TAPDATA_COLLECTION_MAP`.
+
+Core logical collections:
 
 ```text
 alert_rules
@@ -128,6 +127,7 @@ patron_alerts
 patron_analysis_reports
 patron_interaction_history
 patron_profiles
+patron_realtime_decision_signals
 patron_risk_cases
 patron_table_sessions
 pr_agent_profiles
@@ -138,186 +138,241 @@ table_round_counters
 table_round_history
 table_state_history
 table_state_snapshots
-patron_realtime_decision_signals
 ```
 
-说明：`patron_realtime_decision_signals` 是后来新增的 TapData 聚合结果表，用于 Demo 展示“多表聚合后给 AI 读一张决策信号表”。
+Typical MDM published service names include:
 
-## 6. 当前页面能力
+```text
+gaming_table_state
+gaming_table_state_history
+gaming_table_round_counters
+gaming_player_round_bets
+gaming_table_minbet_audit
+gaming_table_minbet_recommendations
+patron_activity_events_ai_ready
+patron_interaction_history_ai_ready
+responsible_play_cases_ai_ready
+ops_patron_alerts_ai_ready
+host_assignments_ai_ready
+gaming_realtime_decision_signals_ai_ready
+```
 
-### 6.1 菜单式 AI 面板
+## 6. TapData task design
 
-位置：`app/command-center.tsx`
+The latest integration approach is:
 
-左侧菜单包括：
+```text
+Oracle / MSSQL / PostgreSQL
+→ TapData 1:1 CDC into MongoDB FDM
+→ TapData rename / normalize into consistent FDM fields
+→ TapData master-detail merge into MongoDB MDM
+→ TapData API publishing from MDM
+→ AI panel reads published APIs
+```
 
-- 总览大盘
-- 桌台热力图
+The simplified task design keeps only two merge tasks:
+
+1. Generate `patron_profiles`.
+2. Generate `patron_table_sessions`.
+
+Other collections can be handled as direct 1:1 CDC / copy tasks into the MDM-ready shape whenever possible. This keeps the demo stable and avoids overloading the live TapData setup with too many join pipelines.
+
+### Join task 1: `patron_profiles`
+
+Purpose: prove that multiple source-system IDs belong to the same guest and build the Customer 360 profile.
+
+Recommended master table:
+
+```text
+MongoDB FDM / fdm_pg_crm_identity_links
+```
+
+Typical source identity example:
+
+```text
+Oracle Gaming      PLAYER_ID   = 100861
+MSSQL Hotel/Ops    guest_id    = H002918
+PostgreSQL Loyalty customer_id = C88921
+PostgreSQL POS     member_no   = VIP100861
+
+Master Player ID   patronId    = P0000100861
+```
+
+Join sources:
+
+| Source system | FDM source | Join condition | Output style |
+|---|---|---|---|
+| PostgreSQL Loyalty | `fdm_pg_crm_patron_profiles` | `crm_identity_links.crm_customer_id = crm_patron_profiles.customer_id` | flatten |
+| Oracle Gaming | `fdm_oracle_gaming_player_account` | `crm_identity_links.gaming_player_id = gaming_player_account.player_id` | flatten |
+| Oracle Gaming | `fdm_oracle_gaming_player_ratings` | `crm_identity_links.gaming_player_id = gaming_player_ratings.player_id` | flatten or latest rating summary |
+| MSSQL Hotel/Ops | `fdm_mssql_hotel_stays` | `crm_identity_links.hotel_guest_id = hotel_stays.guest_id` | embedded document, e.g. `hotelSnapshot` |
+
+### Join task 2: `patron_table_sessions`
+
+Purpose: show who is currently at the table, current wager/stack, behavior tags, active risk count, and service context.
+
+Recommended master table:
+
+```text
+MongoDB FDM / fdm_oracle_gaming_table_sessions
+```
+
+Join sources:
+
+| Source system | FDM source | Join condition | Output style |
+|---|---|---|---|
+| PostgreSQL Loyalty | `fdm_pg_crm_identity_links` | `table_sessions.player_id = crm_identity_links.gaming_player_id` | flatten identity fields |
+| PostgreSQL Loyalty | `fdm_pg_crm_patron_profiles` | `crm_identity_links.crm_customer_id = crm_patron_profiles.customer_id` | flatten profile fields |
+| MSSQL Responsible Play | `fdm_mssql_responsible_play_cases` | `crm_identity_links.hotel_guest_id = responsible_play_cases.guest_id` or normalized `patronId` | embedded array, e.g. `risks` |
+| MSSQL Host Ops | `fdm_mssql_host_assignments` | normalized `patronId` or `hotel_guest_id` | embedded document, e.g. `assignment` |
+| PostgreSQL App/POS | optional activity tables | normalized `patronId` | embedded arrays, e.g. `recentActivities`, `interactions` |
+
+Important TapData setting:
+
+- If the target field should hold multiple records, use embedded array and fill the array write path.
+- If the target field is a single summary object, use embedded document and fill the document write path.
+- Avoid mapping one source table to two different targets in a single join task.
+
+## 7. Current UI capabilities
+
+### Menu-based AI panel
+
+Implemented in `app/command-center.tsx`.
+
+Left menu:
+
+- Operations Overview
+- Table Heatmap
 - AI Chat
-- 客户 360
-- 场景工坊
-- 数据模拟器
+- Customer 360
+- Scenario Studio
+- Data Simulator
 
-用户明确要求不要把三个模块堆在同一页，所以新版采用左侧菜单分模块。
+This structure was chosen because the demo owner explicitly did not want all modules on one crowded page.
 
-### 6.2 总览大盘
+### Operations Overview
 
-读取真实 TapData API 数据，展示：
+Reads live TapData API data and shows:
 
-- 桌台总数
-- 在场客户
-- 风险客户
-- 最热区域
-- 热门桌台
-- 实时桌台缩略图
+- total tables
+- active patrons
+- risk patrons
+- hottest zone
+- hot table ranking
+- zone signal
+- floor pulse mini-map
 
-前端自动刷新：每 3 秒一次。
+The front end refreshes every 3 seconds when auto-refresh is enabled.
 
-### 6.3 桌台热力图
+### Table Heatmap
 
-根据 `patron_table_sessions` 等数据聚合桌台状态：
+Aggregates table status from sessions and table state data:
 
 - occupancy
 - active patrons
 - session wager
 - risk signals
-- VIP 数
-- 热门 / 风险 / 关闭状态
+- VIP count
+- live / hot / risk / closed state
 
-已实现交互：
+Interactions:
 
-- 点击桌台卡片后，不再在页面底部展开大面板。
-- 现在会在页面中央弹出“桌台 AI 分析”小弹窗。
-- 点击空白区域关闭。
-- 按 `Esc` 关闭。
-- 弹窗中可点击“打开 AI Chat 深入分析”。
+- Clicking a table opens a centered Table AI Analysis modal.
+- Clicking the backdrop closes the modal.
+- `Esc` closes the modal.
+- The modal can open AI Chat with a prefilled table-analysis prompt.
 
-### 6.4 AI Chat
+### AI Chat
 
-位置：`app/api/ai/chat/route.ts`
+Implemented in `app/api/ai/chat/route.ts`.
 
-AI Chat 已实现真实 GPT / OpenAI 兼容接口调用逻辑。
+The route supports DeepSeek / OpenAI-compatible chat completions and controlled tool calls.
 
-支持：
+Supported query themes:
 
-- 查询客户
-- 查询 Session
-- 查询桌台
-- 查询优惠
-- 查询风险
-- 查询 `patron_realtime_decision_signals`
+- patron
+- session
+- table
+- offer
+- risk
+- alert
+- real-time decision signal
 
-重点规则：
+For next-best-action, offer, governance, or scenario-demo questions, the route should prefer the decision signal collection when available.
 
-- 对于 next-best-action、offer、governance、scenario-demo 问题，优先使用 `get_decision_signal`。
-- `get_decision_signal` 读取 `patron_realtime_decision_signals`。
-- 如果 live API 不可用，会退回模拟数据。
+If live TapData APIs are unavailable, the route falls back to simulated data.
 
-### 6.5 客户 360
+### Customer 360
 
-支持：
+Features:
 
-- 搜索客户
-- 筛选客户
-- 查看客户画像、等级、地区、偏好、实时 Session、风险状态
-- 展示 Trusted Next Best Action
-- 展示治理流程：
-  1. AI 生成建议
-  2. 治理校验 / 风险管控
-  3. 主管审批
-  4. WhatsApp 触达
+- customer search
+- customer filters
+- profile, tier, region, preferences
+- active session
+- risk status
+- Trusted Next Best Action
+- approval and governance flow
 
-重要逻辑已修正：
+Governance behavior:
 
-- 状态良好的客户不再显示“风险提示管控”。
-- 健康客户显示“治理校验通过 / 待主管审批”。
-- 风险客户才显示“风险管控 / 治理拦截”。
-- `LateNight` 不再被当作风险，只作为“服务提醒：深夜在场”。
-- 客户一选中就会基于画像/实时 Session/积分/偏好/风险规则生成当前推荐，不再显示空的“运行 AI 生成下一步建议”。
-- 无风险客户的顶部弹窗不再提供“发送风险告警”，而是显示“治理中心 / 当前没有待处理风险告警”。
-- 推荐动作有生命周期控制：同一个客户、同一条推荐、同一组关键数据已经发送后，只显示“已推荐”回执，不再重复显示批准/发送按钮；当客户状态、桌台、投注、风险或推荐内容变化导致 recommendation fingerprint 变化时，才重新出现可推荐动作。
-- 真实风险触发条件包括：
-  - `activeRiskCount > 0`
-  - `CardCounterWatch`
-  - `Aggressive`
-  - `HighVariance`
-  - `ResponsiblePlay`
-  - `SelfExcluded`
-  - `RG-*`
+- Healthy customers are not labeled as risk cases.
+- Healthy customers show governance / approval steps.
+- Risk customers show risk control and escalation.
+- `LateNight` is a service signal, not a risk signal.
+- A selected customer receives a recommendation based on profile, current session, points, preferences, and risk status.
+- Once a recommendation has been sent, the UI shows the sent state instead of repeatedly showing the send button.
+- A new recommendation becomes available only when the recommendation fingerprint changes.
 
-### 6.6 场景工坊
+Risk triggers include:
 
-当前状态：已实现“场景模板 + 演示脚本 + 本地注入”，但还没有完全实现“TapData 一更新数据，场景工坊自动识别并点亮场景”。
+- `activeRiskCount > 0`
+- `CardCounterWatch`
+- `Aggressive`
+- `HighVariance`
+- `ResponsiblePlay`
+- `SelfExcluded`
+- `RG-*`
 
-当前 6 个场景：
+### Scenario Studio
 
-| 场景 | trigger | 说明 |
+Current status: templates and demo scripts are implemented. Full automatic scenario detection from live `patron_realtime_decision_signals` is still a recommended next enhancement.
+
+Current scenario templates:
+
+| Scenario | Trigger | Story |
 |---|---|---|
-| 高价值客户回流 | `high_value_return` | 沉睡 VIP 回来，推荐非博彩礼遇 |
-| 桌台拥堵预警 | `zone_b_capacity_pressure` | 区域拥挤，建议调度 |
-| 风险升级与人工接管 | `responsible_play_review` | 拦截刺激型优惠，通知管理员 |
-| 优惠疲劳识别 | `offer_fatigue` | 降低触达频率 |
-| 客户经理跟进超时 | `host_followup_overdue` | 生成客户经理任务 |
-| 数据质量异常 | `impossible_occupancy` | 展示数据质量 / 治理能力 |
+| High-value return | `high_value_return` | Dormant VIP returns and receives non-gaming hospitality. |
+| Table capacity pressure | `zone_b_capacity_pressure` | A zone becomes crowded and operations should rebalance capacity. |
+| Responsible-play escalation | `responsible_play_review` | Incentives are blocked and an administrator is notified. |
+| Offer fatigue | `offer_fatigue` | AI reduces outreach frequency due to repeated ignored offers. |
+| Host follow-up overdue | `host_followup_overdue` | A host task is generated for delayed follow-up. |
+| Data quality anomaly | `impossible_occupancy` | Data quality and governance are demonstrated. |
 
-目前用户问过：“只要我在 TapData 更新数据，就可以看到效果吗？”  
-准确回答：
-
-- 总览、热力图、客户 360、AI Chat：可以通过真实 API 看到效果。
-- 场景工坊：目前不会自动根据 `patron_realtime_decision_signals` 点亮对应场景；需要下一步实现“实时场景识别”。
-
-建议下一步开发：
-
-1. 新增 `/api/data/scenario-signals`，读取 `patron_realtime_decision_signals`。
-2. 前端每 3 秒读取该接口。
-3. 根据 `triggerType` / `scenarioType` / `recommendedAction` 匹配 6 个场景。
-4. 场景卡显示：
-   - 已识别
-   - 来自 TapData 聚合表
-   - 涉及 patronId / tableId
-   - riskScore / opportunityScore
-   - recommendedAction
-   - governanceDecision
-5. 点击场景时展示真实聚合记录，而不是模板 JSON。
-
-这样现场故事会变成：
+Recommended next implementation:
 
 ```text
-TapData CDC 更新源表
-→ TapData 聚合目标表 patron_realtime_decision_signals
-→ AI 面板 3 秒内识别场景
-→ 场景工坊点亮
-→ AI Chat 解释证据和下一步动作
-→ 审批 / WhatsApp / Mongo 审计闭环
+TapData CDC updates source systems
+→ MDM collection updates
+→ AI panel polls every 3 seconds
+→ Scenario Studio highlights the matching story
+→ AI Chat explains evidence and next action
+→ approval / WhatsApp / audit trail closes the loop
 ```
 
-### 6.7 数据模拟器
+### Data Simulator
 
-用于本地排练，不写入 MongoDB 业务表。
+The simulator is for local rehearsal. It does not write business data into MongoDB. It can inject local browser-level session changes for safe UI rehearsals.
 
-作用：
+## 8. Audit trail
 
-- 手动造一个 Session
-- 立即影响前端大盘和热力图
-- 安全排练 Demo，不污染真实业务数据
-
-注意：这不是 TapData CDC 写入，只是浏览器 localStorage 层的模拟数据。
-
-## 7. 审计闭环
-
-页面动作会调用：
+UI actions call:
 
 ```text
 POST /api/audit/events
 ```
 
-再由本地桥写入：
-
-```text
-MongoDB: ai_loyalty_engine.ai_action_events
-```
-
-已支持动作：
+Supported action types:
 
 ```text
 risk_alert_sent
@@ -327,82 +382,70 @@ recommendation_rejected
 recommendation_sent
 ```
 
-用户曾经反馈点击“发送 WhatsApp”后没闭环。现在逻辑是：
+Expected UX:
 
-- 发送成功后显示已发送。
-- 审计写入成功则提示 `Mongo 已落库`。
-- 如果桥没启动，则提示 `Mongo 写入桥未启动，请重启 npm run dev`。
-- 如果未配置，才提示 `Mongo 未配置，前端仅展示状态`。
+- Sending an alert or recommendation updates the UI immediately.
+- If Mongo audit write succeeds, the UI indicates that the action was persisted.
+- If the local bridge is not running, the UI tells the user to restart with `npm run dev`.
+- If audit persistence is not configured, the UI still shows the front-end state but indicates that Mongo persistence is unavailable.
 
-## 8. 已知设计偏好
+## 9. Design preferences from the demo owner
 
-用户明确偏好：
+- Use a clear, bright UI. Avoid dark low-contrast colors.
+- Use larger, readable typography.
+- Keep modules separated by the left menu.
+- Support Simplified Chinese, Traditional Chinese, and English in the UI.
+- Make the AI story visible; avoid presenting only raw data tables.
+- Highlight TapData CDC, merge, cleansing, MongoDB, AI decisioning, governance approval, notification, and audit.
+- Table heatmap must be clickable and lead to AI analysis.
+- AI Chat must actually call the AI provider and query live TapData data through server-side tools.
+- Healthy customers should be described as governance / approval cases, not risk-control cases.
 
-- 页面要清晰，不要暗到看不清。
-- 字体要大一些。
-- 模块必须拆菜单，不要堆在一个页面。
-- 中文可用简体 / 繁体 / 英文国际化。
-- AI 部分要有故事，不只是数据列表。
-- Demo 要能讲出 TapData CDC、聚合、MongoDB、AI 决策、治理审批、通知闭环。
-- 桌台热力图要能点击进入 AI 分析。
-- AI Chat 要真实可以调用 AI 查询 Mongo/TapData 数据。
-- 健康客户不要说“风险管控”，要说“治理审批 / 合规留痕”。
+## 10. Regression status
 
-## 9. 当前回归状态
-
-最近一次验证：
+Run:
 
 ```bash
 npm test
 npm run lint
 ```
 
-结果：通过。
+The test suite currently covers:
 
-`npm test` 包含：
+- build
+- server rendering
+- AI Chat simulated collection flow
+- governed delivery
+- no secrets rendered to the client
 
-- 构建
-- 服务端渲染测试
-- AI Chat 模拟集合测试
-- 密钥不下发到客户端测试
+## 11. Recommended next work
 
-## 10. 如果下一位 AI 要继续开发，建议优先做什么
+Priority: make Scenario Studio detect live MDM scenario signals automatically.
 
-第一优先级：实现“场景工坊实时识别 TapData 聚合表”。
+Suggested implementation:
 
-建议任务拆法：
+1. Add `app/api/data/scenario-signals/route.ts`.
+2. Read the decision signal service, usually mapped from `patron_realtime_decision_signals`.
+3. Support filters by `triggerType`, `patronId`, and `tableId`.
+4. Poll the endpoint every 3 seconds from `app/command-center.tsx`.
+5. Show a live badge on the matching scenario card.
+6. When a live scenario is selected, display the real MDM record instead of template JSON.
+7. Prefill AI Chat with an evidence-based analysis prompt.
 
-1. 新增 `app/api/data/scenario-signals/route.ts`
-   - 读取 `patron_realtime_decision_signals`
-   - 支持 filter by `triggerType`、`patronId`、`tableId`
-   - 返回最近 N 条真实聚合信号
-
-2. 修改 `app/command-center.tsx`
-   - 增加 `scenarioSignals` state
-   - 复用 3 秒自动刷新
-   - 场景工坊左侧列表显示 live badge
-   - 右侧展示真实 signal record
-   - 如果没有真实 signal，继续展示模板
-
-3. AI Chat 入口
-   - 点击真实 signal 后，把 prompt 预填成：
+Example prompt:
 
 ```text
-请基于 patron_realtime_decision_signals 分析 triggerType=xxx 的场景：
-客户 xxx，桌台 xxx。请说明触发原因、证据来源、AI 判断、治理策略和下一步动作。
+Analyze the live decision signal for triggerType=<trigger>.
+Patron: <patronId>. Table: <tableId>.
+Explain the trigger reason, data evidence, AI judgement, governance decision, and next-best-action.
 ```
 
-4. 回归测试
+## 12. Do not do
 
-```bash
-npm test
-npm run lint
-```
-
-## 11. 不要做的事
-
-- 不要把 `.env.local` 的真实密钥写入 README、交接文档或提交。
-- 不要把 MongoDB driver 直接 import 到前端 API route 中，避免 Worker / Sites 运行时报 `punycode/require`。
-- 不要把健康客户标成风险。
-- 不要把场景工坊说成“已经完全自动识别”，目前还没做完这一层。
-- 不要直接运行 `vinext dev` 替代 `npm run dev`，否则 Mongo 审计桥不会启动。
+- Do not commit `.env.local`.
+- Do not put real secrets, API keys, tokens, passwords, private keys, or server certificates into Markdown or source code.
+- Do not expose database credentials to the browser.
+- Do not import the MongoDB driver directly into browser-facing runtime bundles.
+- Do not label healthy customers as risk cases.
+- Do not claim Scenario Studio has full live auto-detection until that enhancement is implemented.
+- Do not run `vinext dev` directly for local demo work; use `npm run dev`.
