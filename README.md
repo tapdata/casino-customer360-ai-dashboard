@@ -43,6 +43,18 @@ identify intent → query approved collection → aggregate evidence → return 
 
 Responses generated from fallback data are clearly marked as simulated.
 
+## Real-time source feeder
+
+To demo real CDC changes, use the source feeder to continuously insert or update matching customer events in Oracle, MSSQL, and PostgreSQL:
+
+```bash
+npm install pg mssql oracledb
+cp .env.source-feeder.example .env.source-feeder
+npm run source:feed
+```
+
+The feeder writes one logical casino customer across the three source systems every 3 seconds. TapData CDC can then capture the changes, merge them into MongoDB MDM collections, publish APIs, and refresh the AI panel. See `SOURCE_FEEDER.md` for the full runbook.
+
 ## Configure DeepSeek AI and TapData APIs
 
 Copy `.env.example` to `.env.local` and fill in the server-side values:

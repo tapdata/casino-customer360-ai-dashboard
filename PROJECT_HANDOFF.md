@@ -57,10 +57,13 @@ If the UI says the Mongo write bridge is not started, restart with `npm run dev`
 | `app/api/tapdata-collections.ts` | Logical collection names and TapData collection mapping support. |
 | `scripts/dev.mjs` | Development launcher. Starts the local relay, audit bridge, and app server. |
 | `scripts/mongo-audit-bridge.mjs` | Node process that writes audit events to MongoDB using the MongoDB driver. |
+| `scripts/realtime-source-feeder.mjs` | Real-time source feeder. Continuously writes matching casino customer events to Oracle, MSSQL, and PostgreSQL for TapData CDC demos. |
 | `.env.local` | Local real credentials. Must not be committed. |
 | `.env.example` | Local environment template. |
 | `.env.cloud.example` | Cloud deployment environment template. |
+| `.env.source-feeder.example` | Source feeder environment template. Copy to `.env.source-feeder` locally and fill source database credentials. |
 | `README.md` | Public project overview. |
+| `SOURCE_FEEDER.md` | Public runbook for the Oracle / MSSQL / PostgreSQL real-time source feeder. |
 
 ## 4. Environment model
 
@@ -176,6 +179,46 @@ The simplified task design keeps only two merge tasks:
 2. Generate `patron_table_sessions`.
 
 Other collections can be handled as direct 1:1 CDC / copy tasks into the MDM-ready shape whenever possible. This keeps the demo stable and avoids overloading the live TapData setup with too many join pipelines.
+
+## 6.1 Real-time source feeder
+
+For live source-side data supply, use:
+
+```bash
+npm install pg mssql oracledb
+cp .env.source-feeder.example .env.source-feeder
+npm run source:feed
+```
+
+The feeder creates one logical customer event package every 3 seconds across:
+
+- Oracle `Oracle_Gaming_Core`
+- MSSQL `MSSQL_Hotel_Ops`
+- PostgreSQL `PostgreSQL_Loyalty_CRM`
+
+Each generated person carries consistent IDs, for example:
+
+```text
+Oracle player_id      → 105001
+MSSQL guest_id        → H300001
+PostgreSQL customer   → C90001
+PostgreSQL member_no  → VIP105001
+Master Player ID      → P0000105001
+```
+
+The script introspects source table columns before writing and only sends fields that exist. This avoids breaking the live demo when optional vector / embedding fields are removed from source schemas.
+
+Feeder scenarios:
+
+- `mixed`
+- `normal`
+- `high_value_return`
+- `risk`
+- `offer_fatigue`
+- `host_overdue`
+- `inactive`
+
+See `SOURCE_FEEDER.md` for detailed commands.
 
 ### Join task 1: `patron_profiles`
 

@@ -45,6 +45,20 @@ type PageResult = {
 };
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
+type LoadPatronsResult = {
+  value: LivePatron[];
+  sourceCounts: {
+    patron_profiles: number;
+    patron_table_sessions: number;
+    patron_risk_cases: number;
+    offer_recommendations: number;
+    chat_messages: number;
+  };
+  errors: Array<{ collection: string; message: string }>;
+};
+
+let cachedLoad: { result: LoadPatronsResult; expiresAt: number } | null = null;
+let inFlightLoad: Promise<LoadPatronsResult> | null = null;
 
 function config(): TapDataConfig | null {
   const baseUrl = process.env.TAPDATA_API_BASE_URL?.replace(/\/$/, "");
@@ -129,11 +143,16 @@ async function fetchPage(current: TapDataConfig, token: string, collection: stri
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({ page, limit, filter: {} }),
-  }, 2_800);
+  }, timeoutForCollection(collection));
   if (!response.ok) throw new Error(`TapData ${tapDataCollectionLabel(collection)} request failed (${response.status})`);
   const payload = await response.json();
   const records = recordsFromPayload(payload);
   return { collection, records, count: countFromPayload(payload, records.length) };
+}
+
+function timeoutForCollection(collection: string) {
+  if (["patron_profiles", "patron_table_sessions", "patron_risk_cases"].includes(collection)) return 12_000;
+  return 4_000;
 }
 
 async function safeFetchPage(current: TapDataConfig, token: string, collection: string, page: number, limit: number): Promise<PageResult> {
@@ -256,7 +275,7 @@ function activeRisk(record: JsonRecord) {
   return ["active", "open", "awaitingadmin", "inreview", "new", "pending"].includes(status);
 }
 
-async function loadPatrons() {
+async function loadPatrons(): Promise<LoadPatronsResult> {
   const current = config();
   if (!current) throw new Error("TapData is not configured");
   const token = await accessToken(current);
@@ -346,9 +365,24 @@ async function loadPatrons() {
   };
 }
 
+async function cachedLoadPatrons() {
+  const now = Date.now();
+  if (cachedLoad && cachedLoad.expiresAt > now) return cachedLoad.result;
+  if (inFlightLoad) return inFlightLoad;
+  inFlightLoad = loadPatrons()
+    .then((result) => {
+      cachedLoad = { result, expiresAt: Date.now() + 7_500 };
+      return result;
+    })
+    .finally(() => {
+      inFlightLoad = null;
+    });
+  return inFlightLoad;
+}
+
 export async function GET() {
   try {
-    const result = await loadPatrons();
+    const result = await cachedLoadPatrons();
     return Response.json({
       data: result.value,
       count: result.value.length,

@@ -750,7 +750,7 @@ const zhText = {
   replay: "重新播放",
   collections: "5 个集合",
   records: "32 条记录",
-  freshness: "3 秒新鲜度",
+  freshness: "8 秒新鲜度",
   observedCount: "3 条已观测事实",
   inferredCount: "3 条推断洞察",
   recommendedCount: "1 个推荐动作",
@@ -909,7 +909,7 @@ const enText: typeof zhText = {
   replay: "Replay",
   collections: "5 collections",
   records: "32 records",
-  freshness: "3s freshness",
+  freshness: "8s freshness",
   observedCount: "3 observed facts",
   inferredCount: "3 inferred insights",
   recommendedCount: "1 recommended",
@@ -1234,7 +1234,7 @@ export default function Home() {
   const [liveDataError, setLiveDataError] = useState("");
   const [liveRefreshTick, setLiveRefreshTick] = useState(0);
   const [primaryView, setPrimaryView] = useState<"customers" | "operations">("operations");
-  const [locale, setLocale] = useState<Locale>("zh-Hans");
+  const [locale, setLocale] = useState<Locale>("zh-Hant");
   const [traditionalConverter, setTraditionalConverter] = useState<((text: string) => string)>(() => identityConverter);
   const [autoTour, setAutoTour] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1352,19 +1352,28 @@ export default function Home() {
   }, [locale]);
 
   useEffect(() => {
+    if (primaryView !== "customers") return undefined;
     let cancelled = false;
+    const controller = new AbortController();
+    const requestSequence = liveRefreshTick;
+    const requestTimer = window.setTimeout(() => controller.abort(), 15_000);
     async function loadLivePatrons() {
       try {
         setLiveDataError("");
         const response = await fetch(`/api/data/patrons?ts=${Date.now()}`, {
           headers: { accept: "application/json", "cache-control": "no-cache" },
           cache: "no-store",
+          signal: controller.signal,
         });
-        const result = await response.json() as { data?: LivePatron[]; sourceCounts?: LiveSourceCounts; error?: string };
-        if (!response.ok || !result.data?.length) throw new Error(result.error || "No live patron data returned");
+        const result = await response.json() as { data?: LivePatron[]; sourceCounts?: LiveSourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }> };
+        if (!response.ok || !result.data) throw new Error(result.error || "No live patron data returned");
         if (cancelled) return;
-        setLivePatrons(result.data);
+        if (requestSequence !== liveRefreshTick) return;
+        if (result.data.length) {
+          setLivePatrons(result.data);
+        }
         if (result.sourceCounts) setLiveSourceCounts(result.sourceCounts);
+        setLiveDataError(result.data.length ? "" : result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh");
         setSelectedId((current) => {
           const pending = pendingDecisionSelectionRef.current;
           if (pending) {
@@ -1376,17 +1385,29 @@ export default function Home() {
             : result.data?.[0]?.patronId ?? current;
         });
       } catch (error) {
-        if (!cancelled) setLiveDataError(error instanceof Error ? error.message : "Unable to load live patrons");
+        if (!cancelled) {
+          const message = error instanceof Error && error.name === "AbortError"
+            ? (locale === "en" ? "The API did not return within 15s; this refresh was skipped and will retry in 8s." : locale === "zh-Hant" ? "接口超過 15 秒未返回，已跳過本輪刷新，8 秒後自動重試。" : "接口超过 15 秒未返回，已跳过本轮刷新，8 秒后自动重试。")
+            : error instanceof Error ? error.message : "Unable to load live patrons";
+          setLiveDataError(message);
+        }
+      } finally {
+        window.clearTimeout(requestTimer);
       }
     }
     loadLivePatrons();
-    return () => { cancelled = true; };
-  }, [liveRefreshTick]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(requestTimer);
+    };
+  }, [liveRefreshTick, locale, primaryView]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setLiveRefreshTick((tick) => tick + 1), 3_000);
+    if (primaryView !== "customers") return undefined;
+    const timer = window.setInterval(() => setLiveRefreshTick((tick) => tick + 1), 8_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [primaryView]);
 
   useEffect(() => {
     if (!pulseOpen) return;
@@ -2196,7 +2217,15 @@ export default function Home() {
         </div>
         <div className="audit-id"><small>{t.decisionId}</small><code>{snapshot.reportId}</code></div>
       </section>
-      </> : <CommandCenter locale={locale} patronId={snapshot.patronId} onOpenDecision={(patronId) => {
+      </> : <CommandCenter
+        locale={locale}
+        patronId={snapshot.patronId}
+        onLivePatronsLoaded={(patrons, sourceCounts) => {
+          setLivePatrons(patrons);
+          if (sourceCounts) setLiveSourceCounts(sourceCounts);
+          setLiveDataError("");
+        }}
+        onOpenDecision={(patronId) => {
         pendingDecisionSelectionRef.current = patronId;
         setFilters(defaultFilters);
         setSearchQuery("");
