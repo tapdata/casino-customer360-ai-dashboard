@@ -42,24 +42,26 @@ Write one cross-system customer event package:
 npm run source:feed:once
 ```
 
-Write continuously every 3 seconds:
+Write continuously every 15 seconds:
 
 ```bash
 npm run source:feed
 ```
 
-Run a bounded local feeder for 48 hours, one batch every 10 seconds:
+Run a bounded local feeder for 10 hours, one batch every 15 seconds:
 
 ```bash
-node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=10000 --start-player-id=109000 --pool-size=180 --duration-hours=48 --max-events=17280
+node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=15000 --start-player-id=109000 --pool-size=350 --active-limit=220 --duration-hours=10 --max-events=2400
 ```
 
-For the two-day demo run, `--pool-size=180` means the script rotates through a stable pool of 180 demo patrons. The first pass creates new customers; later passes update the same source records, so TapData CDC sees both inserts and updates without creating an uncontrolled number of new VIPs.
+For the demo run, `--pool-size=350` means the script rotates through a stable pool of up to 350 demo patrons. `--active-limit=220` keeps the live floor busy but leaves a visible inactive customer population for Customer 360. The first pass creates new customers; later passes update the same source records. Some patrons are periodically marked inactive, so TapData CDC sees both arrivals and departures without creating an uncontrolled number of active VIPs.
+
+The table assignment uses a controlled heat distribution: a few tables become naturally hot, some remain quiet or empty, VIP patrons lean toward VIP tables, and no table is allowed to exceed 25 visible patrons including seated guests and standing observers.
 
 If previous demo runs left too many active patrons on the floor, retire that old generated range before starting the new run:
 
 ```bash
-node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=10000 --start-player-id=109000 --pool-size=180 --duration-hours=48 --max-events=17280 --retire-player-range=105000-108999
+node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=15000 --start-player-id=109000 --pool-size=350 --active-limit=220 --duration-hours=10 --max-events=2400 --retire-player-range=105000-108999
 ```
 
 This does not delete source records. It only marks old generated Oracle table sessions inactive and closes old generated MSSQL risk cases / alerts so the AI panel stops counting stale activity.
@@ -68,11 +70,11 @@ Optional parameters:
 
 ```bash
 node scripts/realtime-source-feeder.mjs --scenario=risk --once
-node scripts/realtime-source-feeder.mjs --scenario=high_value_return --interval=3000
+node scripts/realtime-source-feeder.mjs --scenario=high_value_return --interval=15000
 node scripts/realtime-source-feeder.mjs --start-player-id=106000
 node scripts/realtime-source-feeder.mjs --batch-size=3
 node scripts/realtime-source-feeder.mjs --duration-hours=2
-node scripts/realtime-source-feeder.mjs --pool-size=100
+node scripts/realtime-source-feeder.mjs --pool-size=350 --active-limit=220
 node scripts/realtime-source-feeder.mjs --retire-player-range=105000-108999 --once
 ```
 
@@ -142,5 +144,5 @@ Feeder writes source changes
 → TapData MDM merge tasks generate patron_profiles and patron_table_sessions
 → MDM 1:1 tasks publish the remaining AI-ready collections
 → TapData published APIs expose the MDM services
-→ AI panel polls every 3 seconds and updates the dashboard / Customer 360 / AI Chat
+→ AI panel polls every 8 seconds and updates the dashboard / Customer 360 / AI Chat
 ```

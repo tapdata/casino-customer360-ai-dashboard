@@ -35,6 +35,7 @@ type LivePatron = {
   preferredGames: string[];
   riskFlags: string[];
   lastActiveAt: string | null;
+  lastHotelBenefitAt: string | null;
   activeSession: {
     tableId: string;
     seatedAt: string | null;
@@ -134,19 +135,19 @@ type DemoRunbook = {
 };
 
 const tableMeta: Record<string, Pick<TableNode, "zone" | "game" | "capacity" | "minBet">> = {
-  "T-0001": { zone: "A", game: "Poker", capacity: 9, minBet: 800 },
-  "T-0002": { zone: "B", game: "Blackjack", capacity: 9, minBet: 500 },
-  "T-0004": { zone: "B", game: "Baccarat", capacity: 9, minBet: 1000 },
-  "T-0007": { zone: "A", game: "Sic Bo", capacity: 9, minBet: 800 },
-  "T-0010": { zone: "A", game: "Roulette", capacity: 9, minBet: 500 },
-  "T-0012": { zone: "C", game: "Blackjack", capacity: 9, minBet: 1000 },
-  "T-0014": { zone: "B", game: "Blackjack", capacity: 9, minBet: 500 },
-  "T-0018": { zone: "VIP", game: "Poker", capacity: 9, minBet: 1000 },
-  "T-0019": { zone: "C", game: "Blackjack", capacity: 9, minBet: 800 },
-  "T-0021": { zone: "B", game: "Poker", capacity: 9, minBet: 800 },
-  "T-0022": { zone: "C", game: "Roulette", capacity: 9, minBet: 300 },
-  "T-0026": { zone: "VIP", game: "Baccarat", capacity: 9, minBet: 300 },
-  "T-0030": { zone: "B", game: "Blackjack", capacity: 9, minBet: 300 },
+  "T-0001": { zone: "A", game: "Poker", capacity: 25, minBet: 800 },
+  "T-0002": { zone: "B", game: "Blackjack", capacity: 25, minBet: 500 },
+  "T-0004": { zone: "B", game: "Baccarat", capacity: 25, minBet: 1000 },
+  "T-0007": { zone: "A", game: "Sic Bo", capacity: 25, minBet: 800 },
+  "T-0010": { zone: "A", game: "Roulette", capacity: 25, minBet: 500 },
+  "T-0012": { zone: "C", game: "Blackjack", capacity: 25, minBet: 1000 },
+  "T-0014": { zone: "B", game: "Blackjack", capacity: 25, minBet: 500 },
+  "T-0018": { zone: "VIP", game: "Poker", capacity: 25, minBet: 1000 },
+  "T-0019": { zone: "C", game: "Blackjack", capacity: 25, minBet: 800 },
+  "T-0021": { zone: "B", game: "Poker", capacity: 25, minBet: 800 },
+  "T-0022": { zone: "C", game: "Roulette", capacity: 25, minBet: 300 },
+  "T-0026": { zone: "VIP", game: "Baccarat", capacity: 25, minBet: 300 },
+  "T-0030": { zone: "B", game: "Blackjack", capacity: 25, minBet: 300 },
 };
 
 const experiences: Array<{ id: Experience; code: string }> = [
@@ -311,7 +312,7 @@ function inferredMeta(tableId: string) {
   return {
     zone: zones[numeric % zones.length],
     game: games[numeric % games.length],
-    capacity: 9,
+    capacity: 25,
     minBet: [300, 500, 800, 1000][numeric % 4],
   };
 }

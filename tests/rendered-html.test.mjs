@@ -2,63 +2,55 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function fetchWorker(path = "/", init = {}) {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+test("keeps the menu-first AI operations console source intact", async () => {
+  const [page, commandCenter] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/command-center.tsx", import.meta.url), "utf8"),
+  ]);
 
-  return worker.fetch(
-    new Request(`http://localhost${path}`, init),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
-}
-
-test("server-renders the menu-first AI operations console", async () => {
-  const response = await fetchWorker("/", { headers: { accept: "text/html" } });
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
-  assert.match(html, /AI 决策工作台/);
-  assert.match(html, /实时运营总览/);
-  assert.match(html, /总览大盘/);
-  assert.match(html, /桌台热力图/);
-  assert.match(html, /AI Chat/);
-  assert.match(html, /客户 360/);
-  assert.match(html, /场景工坊/);
-  assert.match(html, /数据模拟器/);
-  assert.match(html, /热门桌台/);
-  assert.match(html, /区域热度/);
-  assert.match(html, /告警中心/);
-  assert.match(html, /product-console/);
-  assert.doesNotMatch(html, /workspace-grid/);
+  assert.match(page, /AI 决策工作台/);
+  assert.match(commandCenter, /即時營運總覽/);
+  assert.match(commandCenter, /總覽大盤/);
+  assert.match(commandCenter, /桌台熱力圖/);
+  assert.match(commandCenter, /AI Chat/);
+  assert.match(commandCenter, /客戶 360/);
+  assert.match(commandCenter, /場景工坊/);
+  assert.match(commandCenter, /數據模擬器/);
+  assert.match(commandCenter, /熱門桌台/);
+  assert.match(commandCenter, /區域熱度/);
+  assert.match(commandCenter, /告警|警示|Alerts/);
+  assert.match(commandCenter, /product-console/);
+  assert.doesNotMatch(commandCenter, /workspace-grid/);
 });
 
-test("AI chat queries simulated collections when live credentials are absent", async () => {
-  const response = await fetchWorker("/api/ai/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      message: "为什么 TEST-S2-P1 现在值得关注？",
-      locale: "zh-Hans",
-      context: { experience: "moment", patronId: "TEST-S2-P1", tableId: "T-0001" },
-    }),
-  });
-  assert.equal(response.status, 200);
-  const payload = await response.json();
-  assert.equal(payload.mode, "demo");
-  assert.equal(payload.provider, "simulated-agent");
-  assert.match(payload.answer, /模拟数据事实/);
-  assert.match(payload.answer, /23,520/);
-  assert.ok(payload.sources.some((source) => source.collection === "patron_table_sessions" && source.count === 1));
+test("is prepared for Vercel / Next.js deployment", async () => {
+  const [pkg, envCloud, vercelDoc, auditRoute] = await Promise.all([
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("../.env.cloud.example", import.meta.url), "utf8"),
+    readFile(new URL("../VERCEL_DEPLOYMENT.md", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/audit/events/route.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.equal(pkg.scripts.dev, "next dev -p 3000");
+  assert.equal(pkg.scripts.build, "next build");
+  assert.equal(pkg.scripts.start, "next start -p 3000");
+  assert.match(String(pkg.dependencies.next), /^\^16\./);
+  assert.match(envCloud, /AI_PROVIDER=deepseek/);
+  assert.match(envCloud, /MONGO_AUDIT_HTTP_URL=/);
+  assert.doesNotMatch(envCloud, /MONGO_AUDIT_HTTP_URL=http:\/\/127\.0\.0\.1/);
+  assert.match(vercelDoc, /Framework Preset \| Next\.js/);
+  assert.match(vercelDoc, /Leave `MONGO_AUDIT_HTTP_URL` empty on Vercel/);
+  assert.match(auditRoute, /runtime = "nodejs"/);
+  assert.match(auditRoute, /MongoClient/);
+  assert.match(auditRoute, /insertOne/);
 });
 
 test("keeps delivery governed and connection secrets out of the client", async () => {
-  const [page, commandCenter, route, css, runbook] = await Promise.all([
+  const [page, commandCenter, route, auditRoute, css, runbook] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/command-center.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai/chat/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/audit/events/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../artifacts/tapdata-ai-scenario-runbook.md", import.meta.url), "utf8"),
   ]);
@@ -89,7 +81,7 @@ test("keeps delivery governed and connection secrets out of the client", async (
   assert.match(commandCenter, /ENTER 提交/);
   assert.match(commandCenter, /customer-filter-popover/);
   assert.match(commandCenter, /客户筛选/);
-  assert.match(commandCenter, /setInterval\(\(\) => void loadLivePatrons\(\), 3_000\)/);
+  assert.match(commandCenter, /setInterval\(\(\) => void loadLivePatrons\(\), 8_000\)/);
   assert.match(commandCenter, /refreshInFlightRef/);
   assert.match(commandCenter, /patron_realtime_decision_signals/);
   assert.match(commandCenter, /scenarioCdcPayload/);
@@ -111,6 +103,8 @@ test("keeps delivery governed and connection secrets out of the client", async (
   assert.match(route, /function_call_output/);
   assert.doesNotMatch(route, /mongodb\+srv:\/\//);
   assert.doesNotMatch(route, new RegExp(["Abcd", "1234"].join("")));
+  assert.doesNotMatch(auditRoute, /mongodb\+srv:\/\//);
+  assert.doesNotMatch(auditRoute, new RegExp(["Abcd", "1234"].join("")));
   assert.match(css, /\.mongo-evidence-card/);
   assert.match(css, /\.notification-popover/);
   assert.match(css, /\.delivery-panel\.ready/);

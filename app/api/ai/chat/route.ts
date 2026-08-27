@@ -484,7 +484,7 @@ async function executeTool(name: string, rawArguments: string) {
       );
     }
     const results = await Promise.all(queries.map(async ([collection, filter, limit]) => {
-      const projection = collection === "patron_profiles"
+      const projection: Record<string, number> = collection === "patron_profiles"
         ? { _id: 0, name: 0, preferenceEmbedding: 0 }
         : { _id: 0 };
       const records = await tapDataFind(collection, filter, { projection, limit });
@@ -555,7 +555,7 @@ function aiConfig() {
 function responseOutputText(payload: { output_text?: string; output?: ResponseOutputItem[] }) {
   if (payload.output_text?.trim()) return payload.output_text.trim();
   return (payload.output || [])
-    .flatMap((item) => item.content || [])
+    .flatMap((item) => "content" in item ? item.content || [] : [])
     .filter((content) => content.type === "output_text" && typeof content.text === "string")
     .map((content) => content.text)
     .join("\n")

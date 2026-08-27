@@ -32,47 +32,90 @@ const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
 const once = args.has("--once") || dryRun;
 const scenarioArg = valueArg("--scenario") || process.env.FEEDER_SCENARIO || "mixed";
-const intervalMs = Number(valueArg("--interval") || process.env.FEEDER_INTERVAL_MS || 3000);
+const intervalMs = Number(valueArg("--interval") || process.env.FEEDER_INTERVAL_MS || 15000);
 const startPlayerId = Number(valueArg("--start-player-id") || process.env.FEEDER_START_PLAYER_ID || 105000);
 const maxEvents = Number(valueArg("--max-events") || process.env.FEEDER_MAX_EVENTS || 0);
 const durationHours = Number(valueArg("--duration-hours") || process.env.FEEDER_DURATION_HOURS || 0);
 const batchSize = Math.max(1, Number(valueArg("--batch-size") || process.env.FEEDER_BATCH_SIZE || 1));
-const poolSize = Math.max(0, Number(valueArg("--pool-size") || process.env.FEEDER_POOL_SIZE || 0));
+const activePatronLimit = Math.max(1, Number(valueArg("--active-limit") || process.env.FEEDER_ACTIVE_PATRON_LIMIT || 220));
+const poolSize = Math.max(0, Number(valueArg("--pool-size") || process.env.FEEDER_POOL_SIZE || activePatronLimit));
+const managedPlayerStart = Number(valueArg("--managed-player-start") || process.env.FEEDER_MANAGED_PLAYER_START || 100000);
+const managedPlayerEnd = Number(valueArg("--managed-player-end") || process.env.FEEDER_MANAGED_PLAYER_END || 119999);
 const retirePlayerRange = valueArg("--retire-player-range") || process.env.FEEDER_RETIRE_PLAYER_RANGE || "";
 const allowPartial = args.has("--allow-partial") || process.env.FEEDER_ALLOW_PARTIAL === "true";
 
 const floorTables = [
-  ["T-0001", "A", "POK", 9, 800],
-  ["T-0002", "B", "BLA", 9, 500],
-  ["T-0003", "A", "ROU", 9, 1000],
-  ["T-0004", "B", "BAC", 9, 1000],
-  ["T-0005", "C", "SIC", 9, 300],
-  ["T-0006", "C", "BLA", 9, 800],
-  ["T-0007", "A", "SIC", 9, 800],
-  ["T-0008", "B", "ROU", 9, 300],
-  ["T-0009", "A", "BAC", 9, 500],
-  ["T-0010", "A", "ROU", 9, 500],
-  ["T-0011", "VIP", "BAC", 8, 3000],
-  ["T-0012", "C", "BLA", 9, 1000],
-  ["T-0013", "B", "ROU", 9, 500],
-  ["T-0014", "B", "BLA", 9, 500],
-  ["T-0015", "VIP", "BAC", 8, 5000],
-  ["T-0016", "A", "POK", 9, 1000],
-  ["T-0017", "C", "SIC", 9, 300],
-  ["T-0018", "VIP", "POK", 8, 1000],
-  ["T-0019", "C", "BLA", 9, 800],
-  ["T-0020", "B", "BAC", 9, 1000],
-  ["T-0021", "B", "POK", 9, 800],
-  ["T-0022", "C", "ROU", 9, 300],
-  ["T-0023", "VIP", "ROU", 8, 1000],
-  ["T-0024", "A", "SIC", 9, 300],
-  ["T-0025", "B", "BAC", 9, 500],
-  ["T-0026", "VIP", "BAC", 8, 300],
-  ["T-0027", "A", "POK", 9, 1000],
-  ["T-0028", "C", "ROU", 9, 300],
-  ["T-0029", "B", "SIC", 9, 500],
-  ["T-0030", "B", "BLA", 9, 300],
+  ["T-0001", "A", "POK", 25, 800],
+  ["T-0002", "B", "BLA", 25, 500],
+  ["T-0003", "A", "ROU", 25, 1000],
+  ["T-0004", "B", "BAC", 25, 1000],
+  ["T-0005", "C", "SIC", 25, 300],
+  ["T-0006", "C", "BLA", 25, 800],
+  ["T-0007", "A", "SIC", 25, 800],
+  ["T-0008", "B", "ROU", 25, 300],
+  ["T-0009", "A", "BAC", 25, 500],
+  ["T-0010", "A", "ROU", 25, 500],
+  ["T-0011", "VIP", "BAC", 25, 3000],
+  ["T-0012", "C", "BLA", 25, 1000],
+  ["T-0013", "B", "ROU", 25, 500],
+  ["T-0014", "B", "BLA", 25, 500],
+  ["T-0015", "VIP", "BAC", 25, 5000],
+  ["T-0016", "A", "POK", 25, 1000],
+  ["T-0017", "C", "SIC", 25, 300],
+  ["T-0018", "VIP", "POK", 25, 1000],
+  ["T-0019", "C", "BLA", 25, 800],
+  ["T-0020", "B", "BAC", 25, 1000],
+  ["T-0021", "B", "POK", 25, 800],
+  ["T-0022", "C", "ROU", 25, 300],
+  ["T-0023", "VIP", "ROU", 25, 1000],
+  ["T-0024", "A", "SIC", 25, 300],
+  ["T-0025", "B", "BAC", 25, 500],
+  ["T-0026", "VIP", "BAC", 25, 300],
+  ["T-0027", "A", "POK", 25, 1000],
+  ["T-0028", "C", "ROU", 25, 300],
+  ["T-0029", "B", "SIC", 25, 500],
+  ["T-0030", "B", "BLA", 25, 300],
 ];
+
+const targetSeatsByTable = {
+  "T-0001": 0,
+  "T-0002": 12,
+  "T-0003": 6,
+  "T-0004": 10,
+  "T-0005": 0,
+  "T-0006": 6,
+  "T-0007": 10,
+  "T-0008": 22,
+  "T-0009": 5,
+  "T-0010": 0,
+  "T-0011": 14,
+  "T-0012": 5,
+  "T-0013": 9,
+  "T-0014": 20,
+  "T-0015": 9,
+  "T-0016": 0,
+  "T-0017": 0,
+  "T-0018": 5,
+  "T-0019": 18,
+  "T-0020": 8,
+  "T-0021": 8,
+  "T-0022": 0,
+  "T-0023": 4,
+  "T-0024": 11,
+  "T-0025": 7,
+  "T-0026": 16,
+  "T-0027": 4,
+  "T-0028": 4,
+  "T-0029": 7,
+  "T-0030": 0,
+};
+
+const plannedActiveSeats = floorTables.flatMap((table) => {
+  const [tableId] = table;
+  return Array.from({ length: targetSeatsByTable[tableId] ?? 7 }, (_, seatIndex) => ({ table, seatIndex }));
+}).sort((left, right) => left.seatIndex - right.seatIndex || left.table[0].localeCompare(right.table[0]));
+
+const effectiveActivePatronLimit = Math.min(activePatronLimit, plannedActiveSeats.length);
 
 function valueArg(name) {
   const prefix = `${name}=`;
@@ -137,26 +180,75 @@ function pick(list, index) {
   return list[index % list.length];
 }
 
+function seededUnit(seed) {
+  const value = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  return value - Math.floor(value);
+}
+
 function scenarioFor(seq) {
   if (scenarioArg !== "mixed") return scenarioArg;
+  const playerOrdinal = poolSize > 0 ? ((seq - 1) % poolSize) + 1 : seq;
+  const cycle = poolSize > 0 ? Math.floor((seq - 1) / poolSize) : 0;
+  if (playerOrdinal > effectiveActivePatronLimit) return "inactive";
+  if (cycle > 0 && (seq + playerOrdinal * 13) % 37 === 0) return "inactive";
   const bucket = seq % 100;
-  if (bucket < 48) return "normal";
-  if (bucket < 66) return "high_value_return";
-  if (bucket < 78) return "offer_fatigue";
-  if (bucket < 88) return "host_overdue";
-  if (bucket < 94) return "risk";
+  if (bucket < 50) return "normal";
+  if (bucket < 70) return "high_value_return";
+  if (bucket < 82) return "offer_fatigue";
+  if (bucket < 90) return "host_overdue";
+  if (bucket < 92) return "risk";
   return "inactive";
 }
 
+function tableWeight(table, playerOrdinal, scenario) {
+  const [tableId, zone] = table;
+  const hotWeights = {
+    "T-0008": 3.4,
+    "T-0014": 3.0,
+    "T-0026": 2.4,
+    "T-0019": 2.1,
+    "T-0011": 1.9,
+    "T-0002": 1.6,
+    "T-0024": 1.4,
+  };
+  const quietWeights = {
+    "T-0001": 0.55,
+    "T-0005": 0.7,
+    "T-0010": 0.72,
+    "T-0016": 0.78,
+    "T-0022": 0.8,
+    "T-0030": 0.82,
+  };
+  let weight = hotWeights[tableId] ?? quietWeights[tableId] ?? 1;
+  if (scenario === "high_value_return") weight *= zone === "VIP" ? 3.8 : 0.65;
+  if (scenario === "risk") weight *= ["T-0014", "T-0019", "T-0028"].includes(tableId) ? 3.1 : 0.75;
+  if (scenario === "host_overdue") weight *= ["A", "VIP"].includes(zone) ? 1.35 : 0.95;
+  if (scenario === "offer_fatigue") weight *= zone === "VIP" ? 0.7 : 1.05;
+  weight *= 0.82 + seededUnit(playerOrdinal + Number(tableId.slice(-2)) * 17) * 0.36;
+  return weight;
+}
+
+function oracleTableTargetCountCase(tableExpr = "TABLE_ID") {
+  const clauses = Object.entries(targetSeatsByTable)
+    .map(([tableId, count]) => `WHEN '${tableId}' THEN ${Math.min(25, Math.max(0, count))}`)
+    .join(" ");
+  return `CASE ${tableExpr} ${clauses} ELSE 0 END`;
+}
+
 function tableFor(playerOrdinal, scenario) {
-  if (scenario === "high_value_return") {
-    return floorTables.find(([tableId]) => ["T-0011", "T-0015", "T-0018", "T-0023", "T-0026"].includes(tableId)) || floorTables[0];
+  if (scenario === "inactive") {
+    return floorTables[(playerOrdinal * 7 + 11) % floorTables.length];
   }
-  if (scenario === "risk") {
-    return floorTables.find(([tableId]) => ["T-0014", "T-0019", "T-0028"].includes(tableId)) || floorTables[0];
+  const planned = plannedActiveSeats[playerOrdinal - 1];
+  if (planned) return planned.table;
+  const weights = floorTables.map((table) => tableWeight(table, playerOrdinal, scenario));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let cursor = seededUnit(playerOrdinal * 97 + scenario.length * 31) * total;
+  for (let index = 0; index < floorTables.length; index += 1) {
+    cursor -= weights[index];
+    if (cursor <= 0) return floorTables[index];
   }
-  const index = (playerOrdinal * 7 + Math.floor(playerOrdinal / 5)) % floorTables.length;
-  return floorTables[index];
+  return floorTables.at(-1);
 }
 
 function buildPerson(seq) {
@@ -174,7 +266,7 @@ function buildPerson(seq) {
   const region = pick(["Macau", "Hong Kong", "Singapore", "Taiwan", "Mainland China"], seq);
   const preferredGame = game === "BAC" ? "Baccarat" : game === "ROU" ? "Roulette" : game === "BLA" ? "Blackjack" : game === "POK" ? "Poker" : "Sic Bo";
   const preferredBenefits = scenario === "risk" ? ["HostCare"] : tier === "Diamond" ? ["SuiteUpgrade", "LateCheckout", "FineDining"] : ["Dining", "Points"];
-  const active = scenario !== "inactive";
+  const active = scenario !== "inactive" && playerOrdinal <= effectiveActivePatronLimit;
   const risky = scenario === "risk";
   const riskFlags = risky ? ["ResponsiblePlayReview"] : scenario === "offer_fatigue" ? ["OfferFatigue"] : [];
   const behaviorTags = risky
@@ -226,7 +318,7 @@ function buildPerson(seq) {
     sessionBet,
     previousBet: Math.round(sessionBet * 0.68),
     stack,
-    tablePatronCount: active ? Math.min(capacity, 2 + ((playerOrdinal + seq) % Math.max(capacity - 1, 1))) : 0,
+    tablePatronCount: active ? Math.min(capacity, targetSeatsByTable[tableId] ?? 6) : 0,
     capacity,
     minBet,
     created,
@@ -267,10 +359,31 @@ class PgSink {
       ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : false,
     });
     await this.client.connect();
+    this.client.on("error", (error) => {
+      console.warn(`PostgreSQL connection event: ${error.message}`);
+      this.client = null;
+      this.cache.clear();
+    });
     await this.client.query(`SET search_path TO ${quotePgIdent(this.schema)}`);
   }
 
+  async reconnect() {
+    try {
+      await this.client?.end();
+    } catch {}
+    this.client = null;
+    this.cache.clear();
+    await this.connect();
+  }
+
+  async ensureConnected() {
+    if (!this.client || this.client._ending || this.client._ended) {
+      await this.reconnect();
+    }
+  }
+
   async columns(table) {
+    await this.ensureConnected();
     if (this.cache.has(table)) return this.cache.get(table);
     const result = await this.client.query(
       "select column_name from information_schema.columns where table_schema=$1 and table_name=$2",
@@ -282,6 +395,7 @@ class PgSink {
   }
 
   async upsert(table, pk, record) {
+    await this.ensureConnected();
     const available = await this.columns(table);
     const entries = Object.entries(record).filter(([key, value]) => available.has(key) && value !== undefined);
     if (!entries.some(([key]) => key === pk)) throw new Error(`PG ${table}: missing primary key ${pk}`);
@@ -493,6 +607,102 @@ class OracleSink {
         UPDATED_AT: oracleTimestamp(person.created),
       });
     }
+    await this.normalizeFloor();
+  }
+
+  async normalizeFloor() {
+    const targetCountCase = oracleTableTargetCountCase("TABLE_ID");
+    await this.connection.execute(
+      `MERGE INTO GAMING_TABLE_SESSIONS t
+       USING (
+         SELECT SESSION_ID,
+                CASE WHEN RN <= TARGET_COUNT THEN 1 ELSE 0 END AS NEXT_ACTIVE
+         FROM (
+           SELECT SESSION_ID,
+                  TABLE_ID,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY TABLE_ID
+                    ORDER BY LAST_ACTION_AT DESC NULLS LAST, SESSION_ID DESC
+                  ) AS RN,
+                  ${targetCountCase} AS TARGET_COUNT
+           FROM GAMING_TABLE_SESSIONS
+           WHERE REGEXP_LIKE(PLAYER_ID, '^[0-9]+$')
+             AND TO_NUMBER(PLAYER_ID) BETWEEN :managedPlayerStart AND :managedPlayerEnd
+         )
+       ) s
+       ON (t.SESSION_ID = s.SESSION_ID)
+       WHEN MATCHED THEN UPDATE
+       SET t.IS_ACTIVE = s.NEXT_ACTIVE,
+           t.LAST_ACTION_AT = CASE WHEN s.NEXT_ACTIVE = 0 THEN CURRENT_TIMESTAMP ELSE t.LAST_ACTION_AT END
+       WHERE NVL(t.IS_ACTIVE, -1) <> s.NEXT_ACTIVE`,
+      { managedPlayerStart, managedPlayerEnd },
+      { autoCommit: false },
+    );
+
+    const floorSelect = floorTables
+      .map(([tableId, zone, game, capacity, minBet]) => {
+        const tableName = `Table ${Number(tableId.slice(2))}`;
+        return (
+          `SELECT '${tableId}' AS TABLE_ID, '${tableName}' AS TABLE_NAME, '${zone}' AS ZONE_CODE, ` +
+          `'${game}' AS GAME_CODE, ${capacity} AS CAPACITY, ${minBet} AS MIN_BET_HKD FROM dual`
+        );
+      })
+      .join(" UNION ALL ");
+
+    await this.connection.execute(
+      `MERGE INTO GAMING_TABLE_STATE t
+       USING (
+         SELECT f.TABLE_ID,
+                f.TABLE_NAME,
+                f.ZONE_CODE,
+                f.GAME_CODE,
+                f.CAPACITY,
+                NVL(a.ACTIVE_COUNT, 0) AS PATRON_COUNT,
+                f.MIN_BET_HKD,
+                CASE WHEN f.ZONE_CODE = 'VIP' THEN 200000 ELSE 80000 END AS MAX_BET_HKD,
+                CASE
+                  WHEN NVL(a.ACTIVE_COUNT, 0) > 0 THEN ROUND(NVL(a.TOTAL_BET, 0) / a.ACTIVE_COUNT)
+                  ELSE f.MIN_BET_HKD
+                END AS AVG_BET_HKD,
+                CASE
+                  WHEN NVL(a.ACTIVE_COUNT, 0) >= 18 THEN 'HOT'
+                  WHEN NVL(a.ACTIVE_COUNT, 0) = 0 THEN 'OPEN'
+                  ELSE 'OPEN'
+                END AS TABLE_STATUS
+         FROM (${floorSelect}) f
+         LEFT JOIN (
+           SELECT TABLE_ID,
+                  COUNT(*) AS ACTIVE_COUNT,
+                  SUM(SESSION_BET_HKD) AS TOTAL_BET
+           FROM GAMING_TABLE_SESSIONS
+           WHERE IS_ACTIVE = 1
+             AND REGEXP_LIKE(PLAYER_ID, '^[0-9]+$')
+             AND TO_NUMBER(PLAYER_ID) BETWEEN :managedPlayerStart AND :managedPlayerEnd
+           GROUP BY TABLE_ID
+         ) a ON a.TABLE_ID = f.TABLE_ID
+       ) s
+       ON (t.TABLE_ID = s.TABLE_ID)
+       WHEN MATCHED THEN UPDATE SET
+         t.TABLE_NAME = s.TABLE_NAME,
+         t.ZONE_CODE = s.ZONE_CODE,
+         t.GAME_CODE = s.GAME_CODE,
+         t.CAPACITY = s.CAPACITY,
+         t.PATRON_COUNT = s.PATRON_COUNT,
+         t.MIN_BET_HKD = s.MIN_BET_HKD,
+         t.MAX_BET_HKD = s.MAX_BET_HKD,
+         t.AVG_BET_HKD = s.AVG_BET_HKD,
+         t.TABLE_STATUS = s.TABLE_STATUS,
+         t.REFRESHED_AT = CURRENT_TIMESTAMP
+       WHEN NOT MATCHED THEN INSERT (
+         TABLE_ID, TABLE_NAME, ZONE_CODE, GAME_CODE, CAPACITY, PATRON_COUNT,
+         MIN_BET_HKD, MAX_BET_HKD, AVG_BET_HKD, TABLE_STATUS, REFRESHED_AT
+       ) VALUES (
+         s.TABLE_ID, s.TABLE_NAME, s.ZONE_CODE, s.GAME_CODE, s.CAPACITY, s.PATRON_COUNT,
+         s.MIN_BET_HKD, s.MAX_BET_HKD, s.AVG_BET_HKD, s.TABLE_STATUS, CURRENT_TIMESTAMP
+       )`,
+      { managedPlayerStart, managedPlayerEnd },
+      { autoCommit: false },
+    );
   }
 
   async retirePlayerRange(range) {
@@ -593,6 +803,9 @@ class MssqlSink {
       created_at: person.created,
       updated_at: person.created,
     });
+    if (!person.risky) {
+      await this.closeActiveRiskForPlayer(person.playerId);
+    }
     await this.upsert("host_assignments", "assignment_id", {
       assignment_id: `HA-${person.playerId}`,
       guest_id: person.guestId,
@@ -614,15 +827,46 @@ class MssqlSink {
         alert_id: `ALERT-${person.playerId}-ACTIVE`,
         patron_source_player_id: person.playerId,
         guest_id: person.guestId,
+        table_id: person.tableId,
         rule_id: "RULE-RISK-001",
+        rule_name: "Responsible play review required",
         alert_title: "Responsible play review required",
         alert_message: "Active risk signal detected. Block incentive offers and notify administrator.",
         severity: "HIGH",
+        status: "OPEN",
         alert_status: "OPEN",
+        triggered_conditions_json: JSON.stringify({ riskScore: 92, behaviorTags: person.behaviorTags, tableId: person.tableId }),
+        patron_snapshot_json: JSON.stringify({ playerId: person.playerId, guestId: person.guestId, tier: person.tier, sessionBetHkd: person.sessionBet }),
+        table_snapshot_json: JSON.stringify({ tableId: person.tableId, zone: person.zone, game: person.preferredGame }),
+        triggered_at: person.created,
+        llm_rationale: "High wager velocity and sensitive behavior tags require administrator review before any offer can be sent.",
         created_at: person.created,
         closed_at: null,
       });
     }
+  }
+
+  async closeActiveRiskForPlayer(playerId) {
+    const closeCase = this.pool.request();
+    closeCase.input("playerId", String(playerId));
+    await closeCase.query(
+      `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("responsible_play_cases")}
+       SET status = 'Closed',
+           risk_score = CASE WHEN risk_score > 20 THEN 20 ELSE risk_score END,
+           reason = 'Risk signal cleared by source feeder normalization.',
+           updated_at = SYSDATETIME()
+       WHERE player_id = @playerId
+         AND status = 'Active'`,
+    );
+
+    const closeAlert = this.pool.request();
+    closeAlert.input("playerId", String(playerId));
+    await closeAlert.query(
+      `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
+       SET status = 'CLOSED'
+       WHERE patron_source_player_id = @playerId
+         AND status = 'OPEN'`,
+    );
   }
 
   async retirePlayerRange(range) {
@@ -643,8 +887,7 @@ class MssqlSink {
     closeAlerts.input("endPlayerId", String(range.end));
     await closeAlerts.query(
       `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
-       SET alert_status = 'CLOSED',
-           closed_at = COALESCE(closed_at, SYSDATETIME())
+       SET status = 'CLOSED'
        WHERE TRY_CONVERT(INT, patron_source_player_id) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)`,
     );
     console.log(`Closed MSSQL risk cases and alerts for player range ${range.start}-${range.end}.`);
@@ -690,6 +933,94 @@ async function connectSinks() {
   return sinks;
 }
 
+async function maintainRiskRatio(sinks) {
+  const oracleSink = sinks.find((sink) => sink instanceof OracleSink);
+  const mssqlSink = sinks.find((sink) => sink instanceof MssqlSink);
+  const pgSink = sinks.find((sink) => sink instanceof PgSink);
+  if (!oracleSink || !mssqlSink) return;
+
+  const activeResult = await oracleSink.connection.execute(
+    `SELECT PLAYER_ID
+     FROM GAMING_TABLE_SESSIONS
+     WHERE IS_ACTIVE = 1
+       AND REGEXP_LIKE(PLAYER_ID, '^[0-9]+$')
+       AND TO_NUMBER(PLAYER_ID) BETWEEN :managedPlayerStart AND :managedPlayerEnd`,
+    { managedPlayerStart, managedPlayerEnd },
+    { outFormat: oracleSink.oracledb.OUT_FORMAT_OBJECT },
+  );
+  const activePlayers = activeResult.rows.map((row) => String(row.PLAYER_ID));
+  if (activePlayers.length === 0) return;
+
+  const targetRiskCount = Math.max(1, Math.round(activePlayers.length * 0.02));
+  const activeSet = new Set(activePlayers);
+  const riskRows = (
+    await mssqlSink.pool
+      .request()
+      .query(
+        `SELECT case_id, player_id, risk_score, updated_at
+         FROM ${quoteMssqlIdent(mssqlSink.schema)}.${quoteMssqlIdent("responsible_play_cases")}
+         WHERE UPPER(status) = 'ACTIVE'
+           AND TRY_CONVERT(INT, player_id) BETWEEN ${managedPlayerStart} AND ${managedPlayerEnd}`,
+      )
+  ).recordset;
+
+  const activeRiskRows = riskRows.filter((row) => activeSet.has(String(row.player_id)));
+  const keepPlayers = activeRiskRows
+    .sort((left, right) => Number(right.risk_score || 0) - Number(left.risk_score || 0) || String(right.updated_at || "").localeCompare(String(left.updated_at || "")))
+    .slice(0, targetRiskCount)
+    .map((row) => String(row.player_id));
+  const keepSet = new Set(keepPlayers);
+  const closePlayers = riskRows.map((row) => String(row.player_id)).filter((playerId) => !keepSet.has(playerId));
+  if (closePlayers.length === 0) return;
+
+  const closeCaseRequest = mssqlSink.pool.request();
+  closePlayers.forEach((playerId, index) => closeCaseRequest.input(`p${index}`, playerId));
+  const closeParams = closePlayers.map((_, index) => `@p${index}`).join(",");
+  await closeCaseRequest.query(
+    `UPDATE ${quoteMssqlIdent(mssqlSink.schema)}.${quoteMssqlIdent("responsible_play_cases")}
+     SET status = 'Closed',
+         risk_score = CASE WHEN risk_score > 20 THEN 20 ELSE risk_score END,
+         reason = 'Demo risk ratio guardrail: keep active floor risk near 2 percent.',
+         updated_at = SYSDATETIME()
+     WHERE player_id IN (${closeParams})
+       AND UPPER(status) = 'ACTIVE'`,
+  );
+
+  const closeAlertRequest = mssqlSink.pool.request();
+  closePlayers.forEach((playerId, index) => closeAlertRequest.input(`p${index}`, playerId));
+  await closeAlertRequest.query(
+    `UPDATE ${quoteMssqlIdent(mssqlSink.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
+     SET status = 'CLOSED'
+     WHERE patron_source_player_id IN (${closeParams})
+       AND UPPER(status) = 'OPEN'`,
+  );
+
+  if (pgSink) {
+    await pgSink.ensureConnected();
+    await pgSink.client.query(
+      `UPDATE ${quotePgIdent(pgSink.schema)}.${quotePgIdent("crm_patron_profiles")}
+       SET risk_flags = ARRAY[]::text[],
+           updated_at = now()
+       WHERE customer_id = ANY($1::text[])`,
+      [closePlayers.map((playerId) => `C${playerId}`)],
+    );
+  }
+
+  const oracleBinds = Object.fromEntries(closePlayers.map((playerId, index) => [`p${index}`, playerId]));
+  const oracleParams = closePlayers.map((_, index) => `:p${index}`).join(",");
+  await oracleSink.connection.execute(
+    `UPDATE GAMING_TABLE_SESSIONS
+     SET BEHAVIOR_TAGS = 'Steady,PromoSeeker',
+         LAST_ACTION_AT = CURRENT_TIMESTAMP
+     WHERE PLAYER_ID IN (${oracleParams})
+       AND IS_ACTIVE = 1`,
+    oracleBinds,
+    { autoCommit: false },
+  );
+  await oracleSink.connection.commit();
+  console.log(`Risk guardrail normalized active risks: target=${targetRiskCount}, closed=${closePlayers.length}.`);
+}
+
 function printPlan(person) {
   console.log(
     `[${new Date().toLocaleTimeString()}] ${person.scenario} ${person.masterPlayerId} ` +
@@ -711,7 +1042,7 @@ async function main() {
   const stopAt = durationMs > 0 ? Date.now() + durationMs : 0;
   console.log(
     `Real-time source feeder starting. scenario=${scenarioArg}, interval=${intervalMs}ms, ` +
-      `batchSize=${batchSize}, poolSize=${poolSize || "unbounded"}, durationHours=${durationHours || "unbounded"}, ` +
+      `batchSize=${batchSize}, poolSize=${poolSize || "unbounded"}, activeLimit=${activePatronLimit}, durationHours=${durationHours || "unbounded"}, ` +
       `dryRun=${dryRun}, maxEvents=${maxEvents || "unbounded"}`,
   );
   const sinks = dryRun ? [] : await connectSinks();
@@ -734,7 +1065,14 @@ async function main() {
               await sink.write(person);
               console.log(`Wrote ${sink.sourceName}.`);
             } catch (error) {
-              throw new Error(`${sink.sourceName} write failed: ${error.message}`);
+              if (typeof sink.reconnect === "function") {
+                console.warn(`${sink.sourceName} write failed once, reconnecting and retrying: ${error.message}`);
+                await sink.reconnect();
+                await sink.write(person);
+                console.log(`Wrote ${sink.sourceName} after reconnect.`);
+              } else {
+                throw new Error(`${sink.sourceName} write failed: ${error.message}`);
+              }
             }
           }
           for (const sink of sinks) {
@@ -742,6 +1080,9 @@ async function main() {
           }
         }
         writtenEvents += 1;
+        if (!dryRun && writtenEvents % 10 === 0) {
+          await maintainRiskRatio(sinks);
+        }
         if (maxEvents > 0 && writtenEvents >= maxEvents) {
           console.log(`Reached maxEvents=${maxEvents}. Stopping source feeder.`);
           break;
