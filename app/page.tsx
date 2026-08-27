@@ -1282,7 +1282,54 @@ export default function Home() {
     () => locale === "en" ? pulseDetailsEn : locale === "zh-Hant" ? deepConvert(pulseDetailsZh, traditionalConverter) : pulseDetailsZh,
     [locale, traditionalConverter],
   );
-  const activePulseDetail = pulseDetails[pulseMetric];
+  // The pulse strip and its detail dialog must be driven by the same live
+  // source-count snapshot. Previously the strip used liveSourceCounts while
+  // the dialog kept the demo seed values (310/292/600/126/120), which made
+  // the two surfaces disagree after a refresh.
+  const visiblePulseDetails = useMemo<Record<PulseMetric, PulseDetail>>(() => {
+    if (!liveSourceCounts) return pulseDetails;
+    const countLabel = (value: number, hans: string, hant: string, english: string) =>
+      `${value} ${locale === "en" ? english : locale === "zh-Hant" ? hant : hans}`;
+    return {
+      ...pulseDetails,
+      profiles: {
+        ...pulseDetails.profiles,
+        title: countLabel(liveSourceCounts.patron_profiles, "个客户画像", "個客戶畫像", "patron profiles"),
+        summary: locale === "en"
+          ? `The latest TapData snapshot returned ${liveSourceCounts.patron_profiles} patron profile records for the AI context.`
+          : locale === "zh-Hant"
+            ? `最新 TapData 快照返回 ${liveSourceCounts.patron_profiles} 筆客戶畫像，作為 AI 上下文。`
+            : `最新 TapData 快照返回 ${liveSourceCounts.patron_profiles} 条客户画像，作为 AI 上下文。`,
+        stats: [{ label: locale === "en" ? "Live records" : locale === "zh-Hant" ? "即時記錄" : "实时记录", value: String(liveSourceCounts.patron_profiles), note: locale === "en" ? "patron_profiles returned by the latest refresh" : locale === "zh-Hant" ? "本輪刷新由 patron_profiles 返回" : "本轮刷新由 patron_profiles 返回" }],
+      },
+      sessions: {
+        ...pulseDetails.sessions,
+        title: countLabel(liveSourceCounts.patron_table_sessions, "个活跃 Session", "個活躍 Session", "active sessions"),
+        summary: locale === "en"
+          ? `The latest TapData snapshot returned ${liveSourceCounts.patron_table_sessions} table-session records used by the live view.`
+          : locale === "zh-Hant"
+            ? `最新 TapData 快照返回 ${liveSourceCounts.patron_table_sessions} 筆桌台 Session，供即時畫面使用。`
+            : `最新 TapData 快照返回 ${liveSourceCounts.patron_table_sessions} 条桌台 Session，供实时画面使用。`,
+        stats: [{ label: locale === "en" ? "Live records" : locale === "zh-Hant" ? "即時記錄" : "实时记录", value: String(liveSourceCounts.patron_table_sessions), note: locale === "en" ? "patron_table_sessions returned by the latest refresh" : locale === "zh-Hant" ? "本輪刷新由 patron_table_sessions 返回" : "本轮刷新由 patron_table_sessions 返回" }],
+      },
+      recommendations: {
+        ...pulseDetails.recommendations,
+        title: countLabel(liveSourceCounts.offer_recommendations, "条 AI 推荐", "條 AI 推薦", "AI recommendations"),
+        stats: [{ label: locale === "en" ? "Live records" : locale === "zh-Hant" ? "即時記錄" : "实时记录", value: String(liveSourceCounts.offer_recommendations), note: locale === "en" ? "offer_recommendations returned by the latest refresh" : locale === "zh-Hant" ? "本輪刷新由 offer_recommendations 返回" : "本轮刷新由 offer_recommendations 返回" }],
+      },
+      risks: {
+        ...pulseDetails.risks,
+        title: countLabel(liveSourceCounts.patron_risk_cases, "个风险案例", "個風險案例", "risk cases"),
+        stats: [{ label: locale === "en" ? "Live records" : locale === "zh-Hant" ? "即時記錄" : "实时记录", value: String(liveSourceCounts.patron_risk_cases), note: locale === "en" ? "patron_risk_cases returned by the latest refresh" : locale === "zh-Hant" ? "本輪刷新由 patron_risk_cases 返回" : "本轮刷新由 patron_risk_cases 返回" }],
+      },
+      messages: {
+        ...pulseDetails.messages,
+        title: countLabel(liveSourceCounts.chat_messages, "条 AI 消息", "條 AI 訊息", "AI messages"),
+        stats: [{ label: locale === "en" ? "Live records" : locale === "zh-Hant" ? "即時記錄" : "实时记录", value: String(liveSourceCounts.chat_messages), note: locale === "en" ? "chat_messages returned by the latest refresh" : locale === "zh-Hant" ? "本輪刷新由 chat_messages 返回" : "本轮刷新由 chat_messages 返回" }],
+      },
+    };
+  }, [liveSourceCounts, locale, pulseDetails]);
+  const activePulseDetail = visiblePulseDetails[pulseMetric];
   const storySteps = useMemo(
     () => locale === "en" ? storyStepsEn : locale === "zh-Hant" ? deepConvert(storyStepsZh, traditionalConverter) : storyStepsZh,
     [locale, traditionalConverter],
@@ -1369,9 +1416,10 @@ export default function Home() {
         if (!response.ok || !result.data) throw new Error(result.error || "No live patron data returned");
         if (cancelled) return;
         if (requestSequence !== liveRefreshTick) return;
-        if (result.data.length) {
-          setLivePatrons(result.data);
-        }
+        // A zero-row response is treated as a failed/empty live snapshot at
+        // this shell level so the fallback story remains render-safe. The
+        // command center itself still replaces its queue with the empty set.
+        setLivePatrons(result.data.length ? result.data : null);
         if (result.sourceCounts) setLiveSourceCounts(result.sourceCounts);
         setLiveDataError(result.data.length ? "" : result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh");
         setSelectedId((current) => {
@@ -1913,8 +1961,8 @@ export default function Home() {
             </div>
             <p className="pulse-modal-summary">{activePulseDetail.summary}</p>
             <div className="pulse-modal-tabs" role="tablist">
-              {(Object.keys(pulseDetails) as PulseMetric[]).map((metric) => (
-                <button type="button" role="tab" aria-selected={pulseMetric === metric} className={pulseMetric === metric ? "active" : ""} key={metric} onClick={() => setPulseMetric(metric)}>{pulseDetails[metric].title.split(" ")[0]}</button>
+              {(Object.keys(visiblePulseDetails) as PulseMetric[]).map((metric) => (
+                <button type="button" role="tab" aria-selected={pulseMetric === metric} className={pulseMetric === metric ? "active" : ""} key={metric} onClick={() => setPulseMetric(metric)}>{visiblePulseDetails[metric].title.split(" ")[0]}</button>
               ))}
             </div>
             <div className="pulse-stat-list">
@@ -2221,7 +2269,7 @@ export default function Home() {
         locale={locale}
         patronId={snapshot.patronId}
         onLivePatronsLoaded={(patrons, sourceCounts) => {
-          setLivePatrons(patrons);
+          setLivePatrons(patrons.length ? patrons : null);
           if (sourceCounts) setLiveSourceCounts(sourceCounts);
           setLiveDataError("");
         }}
