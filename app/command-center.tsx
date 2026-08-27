@@ -519,16 +519,15 @@ export default function CommandCenter({
       const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }> };
       if (!response.ok || !result.data) throw new Error(result.error || "Unable to load live data");
       if (refreshSequenceRef.current !== requestSequence) return;
-      if (result.data.length) {
-        setPatrons(result.data);
-        livePatronsLoadedRef.current?.(result.data, result.sourceCounts || null);
-      }
+      // Always replace the previous snapshot, including an empty response.
+      // Keeping the old array made the dashboard and detail views show stale
+      // customers after a successful refresh returned no rows.
+      setPatrons(result.data);
+      livePatronsLoadedRef.current?.(result.data, result.sourceCounts || null);
       setSourceCounts(result.sourceCounts || null);
       setDataError(result.data.length ? "" : result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh");
       setLastUpdatedAt(new Date());
-      if (result.data.length) {
-        setSelectedPatronId((current) => result.data!.some((item) => item.patronId === current) ? current : result.data![0]?.patronId || patronId);
-      }
+      setSelectedPatronId((current) => result.data!.some((item) => item.patronId === current) ? current : result.data![0]?.patronId || patronId);
     } catch (error) {
       if (refreshSequenceRef.current === requestSequence) {
         const message = error instanceof Error && error.name === "AbortError"
