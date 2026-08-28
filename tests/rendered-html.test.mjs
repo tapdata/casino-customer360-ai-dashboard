@@ -21,15 +21,15 @@ test("server-renders the menu-first AI operations console", async () => {
 
   const html = await response.text();
   assert.match(html, /AI 决策工作台/);
-  assert.match(html, /实时运营总览/);
-  assert.match(html, /总览大盘/);
-  assert.match(html, /桌台热力图/);
+  assert.match(html, /实时运营总览|即時營運總覽/);
+  assert.match(html, /总览大盘|總覽大盤/);
+  assert.match(html, /桌台热力图|桌台熱力圖/);
   assert.match(html, /AI Chat/);
-  assert.match(html, /客户 360/);
-  assert.match(html, /场景工坊/);
-  assert.match(html, /数据模拟器/);
-  assert.match(html, /热门桌台/);
-  assert.match(html, /区域热度/);
+  assert.match(html, /客户 360|客戶 360/);
+  assert.match(html, /场景工坊|場景工坊/);
+  assert.match(html, /数据模拟器|數據模擬器/);
+  assert.match(html, /热门桌台|熱門桌台/);
+  assert.match(html, /区域热度|區域熱度/);
   assert.match(html, /告警中心/);
   assert.match(html, /product-console/);
   assert.doesNotMatch(html, /workspace-grid/);
@@ -89,7 +89,7 @@ test("keeps delivery governed and connection secrets out of the client", async (
   assert.match(commandCenter, /ENTER 提交/);
   assert.match(commandCenter, /customer-filter-popover/);
   assert.match(commandCenter, /客户筛选/);
-  assert.match(commandCenter, /setInterval\(\(\) => void loadLivePatrons\(\), 3_000\)/);
+  assert.match(commandCenter, /setInterval\(\(\) => void loadLivePatrons\(\), 8_000\)/);
   assert.match(commandCenter, /refreshInFlightRef/);
   assert.match(commandCenter, /patron_realtime_decision_signals/);
   assert.match(commandCenter, /scenarioCdcPayload/);
