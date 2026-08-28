@@ -85,6 +85,7 @@ Key variables:
 - `TAPDATA_TOKEN_AUTH_METHOD`: `client_secret_post` by default, or `client_secret_basic`.
 - `TAPDATA_ACCESS_TOKEN`: optional fixed bearer token for short local debugging only.
 - `TAPDATA_SCAN_LIMIT`: maximum records scanned locally if the published API ignores the filter object.
+- `PATRONS_CACHE_FRESH_MS`: dashboard snapshot freshness window. The first load waits for TapData; later polls return the last complete snapshot immediately while one background refresh runs, even when the snapshot is older than the freshness window.
 
 Example external TapData configuration:
 

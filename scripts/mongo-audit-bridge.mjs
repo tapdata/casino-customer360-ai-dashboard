@@ -157,6 +157,18 @@ server.listen(port, host, () => {
   console.log(`Local Mongo audit bridge ready on http://${host}:${port}`);
 });
 
+// Audit persistence is optional for local development. A stale bridge or
+// another local tool may already own the configured port; do not let that
+// prevent the read-only AI panel from starting.
+server.on("error", (error) => {
+  if (["EADDRINUSE", "EPERM", "EACCES"].includes(error?.code)) {
+    console.error(`Local Mongo audit bridge unavailable (${error.code}) on port ${port}; continuing without local persistence.`);
+    process.exit(0);
+  }
+  console.error("Local Mongo audit bridge failed to start.", error);
+  process.exit(1);
+});
+
 function stop() {
   server.close();
   void client?.close();

@@ -480,6 +480,7 @@ export default function CommandCenter({
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [cacheState, setCacheState] = useState<"miss" | "fresh" | "stale">("miss");
   const refreshInFlightRef = useRef(false);
   const refreshSequenceRef = useRef(0);
   const livePatronsLoadedRef = useRef(onLivePatronsLoaded);
@@ -517,7 +518,7 @@ export default function CommandCenter({
         cache: "no-store",
         signal: controller.signal,
       });
-      const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }> };
+      const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }>; fetchedAt?: string; cacheState?: "miss" | "fresh" | "stale" };
       if (!response.ok || !result.data) throw new Error(result.error || "Unable to load live data");
       if (refreshSequenceRef.current !== requestSequence) return;
       // Always replace the previous snapshot, including an empty response.
@@ -527,7 +528,8 @@ export default function CommandCenter({
       livePatronsLoadedRef.current?.(result.data, result.sourceCounts || null);
       setSourceCounts(result.sourceCounts || null);
       setDataError(result.data.length ? "" : result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh");
-      setLastUpdatedAt(new Date());
+      setCacheState(result.cacheState || "miss");
+      setLastUpdatedAt(result.fetchedAt ? new Date(result.fetchedAt) : new Date());
       setSelectedPatronId((current) => result.data!.some((item) => item.patronId === current) ? current : result.data![0]?.patronId || patronId);
     } catch (error) {
       if (refreshSequenceRef.current === requestSequence) {
@@ -852,7 +854,7 @@ export default function CommandCenter({
                 <button type="button" onClick={() => void loadLivePatrons()} disabled={refreshing} aria-label={tx(locale, "立即刷新数据", "立即刷新數據", "Refresh data now")}>
                   <b className={refreshing ? "spinning" : ""}>↻</b>{refreshing ? tx(locale, "刷新中", "刷新中", "Refreshing") : tx(locale, "立即刷新", "立即刷新", "Refresh")}
                 </button>
-                <small>{dataError ? dataError : lastUpdatedAt ? `${tx(locale, "更新于", "更新於", "Updated")} ${lastUpdatedAt.toLocaleTimeString(locale === "en" ? "en-US" : "zh-CN", { hour12: false })}` : tx(locale, "正在读取实时数据", "正在讀取即時數據", "Loading live data")}</small>
+                <small>{dataError ? dataError : lastUpdatedAt ? `${cacheState === "stale" ? tx(locale, "快照于", "快照於", "Snapshot").concat(" ") : tx(locale, "更新于", "更新於", "Updated")} ${lastUpdatedAt.toLocaleTimeString(locale === "en" ? "en-US" : "zh-CN", { hour12: false })}${cacheState === "stale" ? ` · ${tx(locale, "后台刷新中", "背景刷新中", "refreshing in background")}` : ""}` : tx(locale, "正在读取实时数据", "正在讀取即時數據", "Loading live data")}</small>
               </div>
               <div className="head-live-stats"><span><i />LIVE</span><b>{activePatrons}</b><small>{tx(locale, "在场客户", "在場客戶", "active patrons")}</small></div>
             </div>
