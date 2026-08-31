@@ -370,7 +370,9 @@ class PgSink {
   async reconnect() {
     try {
       await this.client?.end();
-    } catch {}
+    } catch {
+      // The connection may already be closed; a fresh client is created below.
+    }
     this.client = null;
     this.cache.clear();
     await this.connect();
