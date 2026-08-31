@@ -33,6 +33,7 @@ yarn-error.log*
 !.env.example
 !.env.cloud.example
 !.env.source-feeder.example
+!.env.tapdata.example
 
 # vercel
 .vercel

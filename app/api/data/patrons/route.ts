@@ -57,8 +57,25 @@ type LoadPatronsResult = {
   errors: Array<{ collection: string; message: string }>;
 };
 
-let cachedLoad: { result: LoadPatronsResult; expiresAt: number } | null = null;
+type PatronCache = {
+  result: LoadPatronsResult;
+  loadedAt: number;
+};
+
+let cachedLoad: PatronCache | null = null;
 let inFlightLoad: Promise<LoadPatronsResult> | null = null;
+
+function positiveEnvMs(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * Keep the panel responsive while TapData is refreshing a large snapshot.
+ * The first request still waits for live data; subsequent requests receive
+ * the last complete snapshot immediately and trigger one background refresh.
+ */
+const patronCacheFreshMs = () => positiveEnvMs("PATRONS_CACHE_FRESH_MS", 7_000);
 
 function config(): TapDataConfig | null {
   const baseUrl = process.env.TAPDATA_API_BASE_URL?.replace(/\/$/, "");
@@ -85,6 +102,34 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8_00
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function readJsonWithTimeout(response: Response, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      response.json(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`TapData response body timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -145,7 +190,7 @@ async function fetchPage(current: TapDataConfig, token: string, collection: stri
     body: JSON.stringify({ page, limit, filter: {} }),
   }, timeoutForCollection(collection));
   if (!response.ok) throw new Error(`TapData ${tapDataCollectionLabel(collection)} request failed (${response.status})`);
-  const payload = await response.json();
+  const payload = await readJsonWithTimeout(response, Math.min(timeoutForCollection(collection), 8_000));
   const records = recordsFromPayload(payload);
   return { collection, records, count: countFromPayload(payload, records.length) };
 }
@@ -367,34 +412,60 @@ async function loadPatrons(): Promise<LoadPatronsResult> {
 
 async function cachedLoadPatrons() {
   const now = Date.now();
-  if (cachedLoad && cachedLoad.expiresAt > now) return cachedLoad.result;
-  if (inFlightLoad) return inFlightLoad;
-  inFlightLoad = loadPatrons()
-    .then((result) => {
-      cachedLoad = { result, expiresAt: Date.now() + 7_500 };
-      return result;
-    })
-    .finally(() => {
-      inFlightLoad = null;
-    });
-  return inFlightLoad;
+  const startLoad = () => {
+    if (inFlightLoad) return inFlightLoad;
+    inFlightLoad = withTimeout(
+      loadPatrons(),
+      positiveEnvMs("PATRONS_LOAD_TIMEOUT_MS", 15_000),
+      "TapData patron snapshot timed out; retrying on the next refresh",
+    )
+      .then((result) => {
+        cachedLoad = { result, loadedAt: Date.now() };
+        return result;
+      })
+      .finally(() => {
+        inFlightLoad = null;
+      });
+    return inFlightLoad;
+  };
+
+  if (!cachedLoad) {
+    return { result: await startLoad(), cacheState: "miss" as const, loadedAt: Date.now() };
+  }
+
+  const age = now - cachedLoad.loadedAt;
+  if (age <= patronCacheFreshMs()) {
+    return { result: cachedLoad.result, cacheState: "fresh" as const, loadedAt: cachedLoad.loadedAt };
+  }
+
+  // Do not make the browser wait for the slow TapData snapshot. The promise
+  // is deliberately shared so overlapping polls never create a request herd.
+  // Once a complete snapshot exists, never block the dashboard on a slow
+  // upstream refresh. This also prevents a temporary TapData slowdown after
+  // the stale window from turning the whole page into an endless spinner.
+  void startLoad().catch(() => undefined);
+  return { result: cachedLoad.result, cacheState: "stale" as const, loadedAt: cachedLoad.loadedAt };
 }
 
 export async function GET() {
   try {
-    const result = await cachedLoadPatrons();
+    const { result, cacheState, loadedAt } = await cachedLoadPatrons();
     return Response.json({
       data: result.value,
       count: result.value.length,
       sourceCounts: result.sourceCounts,
       warnings: result.errors,
       mode: "live",
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: new Date(loadedAt).toISOString(),
+      servedAt: new Date().toISOString(),
+      cacheState,
     }, {
       headers: {
         "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
         pragma: "no-cache",
         expires: "0",
+        "x-patrons-cache": cacheState,
+        "x-patrons-cache-age-ms": String(Math.max(0, Date.now() - loadedAt)),
       },
     });
   } catch (error) {

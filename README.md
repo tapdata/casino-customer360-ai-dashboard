@@ -33,7 +33,7 @@ Open:
 http://localhost:3000
 ```
 
-Do not run `vinext dev` directly. `npm run dev` starts the local helper processes required by this demo, including the Mongo audit bridge.
+`npm run dev` starts the Vercel-compatible Next.js development server. The earlier Cloudflare/Vinext commands are still available as `npm run dev:cloudflare`, `npm run build:cloudflare`, and `npm run start:cloudflare`.
 
 When external credentials are not configured, the AI Chat falls back to simulated collections whose structure mirrors the TapData-published MongoDB collections. The fallback still executes the same logical flow:
 
@@ -53,7 +53,7 @@ cp .env.source-feeder.example .env.source-feeder
 npm run source:feed
 ```
 
-The feeder writes one logical casino customer across the three source systems every 3 seconds. TapData CDC can then capture the changes, merge them into MongoDB MDM collections, publish APIs, and refresh the AI panel. See `SOURCE_FEEDER.md` for the full runbook.
+The feeder writes one logical casino customer across the three source systems every 15 seconds by default. TapData CDC can then capture the changes, merge them into MongoDB MDM collections, publish APIs, and refresh the AI panel. See `SOURCE_FEEDER.md` for the full runbook.
 
 ## Configure DeepSeek AI and TapData APIs
 
@@ -62,6 +62,14 @@ Copy `.env.example` to `.env.local` and fill in the server-side values:
 ```bash
 cp .env.example .env.local
 ```
+
+For an external TapData gateway, you can also copy the focused TapData template:
+
+```bash
+cp .env.tapdata.example .env.local
+```
+
+The AI panel reads TapData only through configuration. To switch from local TapData to an external TapData service, change the `TAPDATA_*` values; no source-code change is required.
 
 Key variables:
 
@@ -77,6 +85,19 @@ Key variables:
 - `TAPDATA_TOKEN_AUTH_METHOD`: `client_secret_post` by default, or `client_secret_basic`.
 - `TAPDATA_ACCESS_TOKEN`: optional fixed bearer token for short local debugging only.
 - `TAPDATA_SCAN_LIMIT`: maximum records scanned locally if the published API ignores the filter object.
+- `PATRONS_CACHE_FRESH_MS`: dashboard snapshot freshness window. The first load waits for TapData; later polls return the last complete snapshot immediately while one background refresh runs, even when the snapshot is older than the freshness window.
+
+Example external TapData configuration:
+
+```bash
+TAPDATA_API_BASE_URL=http://<tapdata-api-host>:3080
+TAPDATA_FIND_PATH_TEMPLATE=/api/v1/{collection}/find
+TAPDATA_TOKEN_URL=http://<tapdata-auth-host>:3030/oauth/token
+TAPDATA_CLIENT_ID=<client-id>
+TAPDATA_CLIENT_SECRET=<client-secret>
+TAPDATA_TOKEN_AUTH_METHOD=client_secret_post
+TAPDATA_SCAN_LIMIT=5000
+```
 
 Example architecture:
 
@@ -93,6 +114,16 @@ MongoDB MDM collections
 ```
 
 The model never receives database credentials. It can only call server-side whitelisted tools, and those tools perform read-only queries against TapData published APIs.
+
+## Vercel deployment
+
+This project can be deployed as a standard Next.js app on Vercel.
+
+```bash
+npm run build
+```
+
+Then import the GitHub repository in Vercel and configure the variables from `.env.cloud.example` under Project Settings → Environment Variables. See `VERCEL_DEPLOYMENT.md` for the production checklist.
 
 ## MongoDB audit persistence
 
