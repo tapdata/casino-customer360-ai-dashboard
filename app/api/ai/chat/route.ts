@@ -211,6 +211,14 @@ function clampLimit(value: unknown, fallback = 20) {
   return Math.min(Math.max(Number(value) || fallback, 1), 50);
 }
 
+function extractExplicitPatronId(message: string) {
+  return message.match(/(?:TEST-S\d-P\d|P-?\d{6,12})/i)?.[0]?.toUpperCase();
+}
+
+function extractExplicitTableId(message: string) {
+  return message.match(/T-\d{4}/i)?.[0]?.toUpperCase();
+}
+
 function compareFilterValues(left: unknown, right: unknown) {
   if (typeof left === "number" && typeof right === "number") return left - right;
   return String(left).localeCompare(String(right));
@@ -305,6 +313,7 @@ type TapDataConfig = {
 };
 
 let cachedTapDataToken: { value: string; expiresAt: number } | null = null;
+let tapDataTokenPromise: Promise<string> | null = null;
 
 function tapDataConfig(): TapDataConfig | null {
   const baseUrl = process.env.TAPDATA_API_BASE_URL?.replace(/\/$/, "");
@@ -338,23 +347,37 @@ async function tapDataAccessToken(config: TapDataConfig) {
   if (cachedTapDataToken && cachedTapDataToken.expiresAt > Date.now() + 60_000) return cachedTapDataToken.value;
   if (!config.tokenUrl || !config.clientId || !config.clientSecret) throw new Error("TapData OAuth is not configured");
 
-  const form = new URLSearchParams({ grant_type: "client_credentials" });
-  const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
-  if (config.tokenAuthMethod === "client_secret_basic") {
-    headers.authorization = `Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`;
-  } else {
-    form.set("client_id", config.clientId);
-    form.set("client_secret", config.clientSecret);
+  // A patron-context lookup fans out to several collections. Reuse the same
+  // in-flight OAuth request so parallel queries do not each request a token.
+  if (tapDataTokenPromise) return tapDataTokenPromise;
+
+  const clientId = config.clientId;
+  const clientSecret = config.clientSecret;
+  tapDataTokenPromise = (async () => {
+    const form = new URLSearchParams({ grant_type: "client_credentials" });
+    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
+    if (config.tokenAuthMethod === "client_secret_basic") {
+      headers.authorization = `Basic ${btoa(`${clientId}:${clientSecret}`)}`;
+    } else {
+      form.set("client_id", clientId);
+      form.set("client_secret", clientSecret);
+    }
+    const response = await fetchWithTimeout(config.tokenUrl!, { method: "POST", headers, body: form.toString() });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 240);
+      throw new Error(`TapData token request failed (${response.status}): ${detail}`);
+    }
+    const token = tokenFromPayload(await response.json());
+    if (!token) throw new Error("TapData token response does not contain access_token");
+    cachedTapDataToken = { value: token.value, expiresAt: Date.now() + Math.max(token.expiresIn, 60) * 1000 };
+    return token.value;
+  })();
+
+  try {
+    return await tapDataTokenPromise;
+  } finally {
+    tapDataTokenPromise = null;
   }
-  const response = await fetchWithTimeout(config.tokenUrl, { method: "POST", headers, body: form.toString() });
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 240);
-    throw new Error(`TapData token request failed (${response.status}): ${detail}`);
-  }
-  const token = tokenFromPayload(await response.json());
-  if (!token) throw new Error("TapData token response does not contain access_token");
-  cachedTapDataToken = { value: token.value, expiresAt: Date.now() + Math.max(token.expiresIn, 60) * 1000 };
-  return token.value;
 }
 
 function tapDataCollectionUrl(config: TapDataConfig, collection: string) {
@@ -699,8 +722,67 @@ Separate the response into: 数据事实, 规则结论, AI 推断, 建议下一�
     const sources: EvidenceSource[] = [];
     const steps: string[] = ["识别查询意图"];
 
+    // DeepSeek is the production provider for the Vercel demo. For an explicit
+    // patron question, fetch the bounded context in parallel and use one model
+    // call. This avoids the generic multi-round tool loop timing out on Vercel.
+    const explicitPatronId = extractExplicitPatronId(message);
+    const explicitTableId = extractExplicitTableId(message);
+    if (provider.provider === "deepseek" && (explicitPatronId || explicitTableId)) {
+      const isPatronQuery = Boolean(explicitPatronId);
+      const includeEngagement = /营销活动|營銷活動|客户活动|客戶活動|互动|互動|优惠|優惠|推荐|推薦|触达|觸達|offer|campaign|interaction/i.test(message);
+      const lookupTarget = explicitPatronId || explicitTableId!;
+      const result = await executeTool(
+        isPatronQuery ? "get_patron_context" : "get_table_context",
+        JSON.stringify(isPatronQuery
+          ? { patronId: explicitPatronId, includeEngagement }
+          : { tableId: explicitTableId }),
+      );
+      sources.push(...result.sources);
+      steps.push(isPatronQuery ? "并行查询客户画像、Session 与风险证据" : "并行查询桌台状态、Session 与容量证据");
+
+      const response = await fetchWithTimeout(`${provider.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${provider.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: provider.model,
+          messages: [
+            {
+              role: "system",
+              content: `${systemInstructions}\nThe server has already executed a precise ${isPatronQuery ? "patron" : "table"} lookup for ${lookupTarget}. Treat only the supplied evidence as factual. Never request another tool. If a collection or field is absent, say so explicitly.`,
+            },
+            {
+              role: "user",
+              content: JSON.stringify({ question: message, target: lookupTarget, evidence: result.data }).slice(0, 18_000),
+            },
+          ],
+          temperature: 0.2,
+          max_tokens: 1000,
+          stream: false,
+        }),
+      }, 8_000);
+      if (!response.ok) {
+        const detail = (await response.text()).slice(0, 300);
+        throw new Error(`deepseek request failed (${response.status}): ${detail}`);
+      }
+      const payload = await response.json() as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const answer = payload.choices?.[0]?.message?.content?.trim();
+      return Response.json({
+        answer: answer || "分析完成，但模型没有返回文字结论。",
+        mode: "live",
+        provider: provider.provider,
+        model: provider.model,
+        steps: [...steps, "基于精确客户证据生成回答"],
+        sources,
+      });
+    }
+
     if (provider.provider === "openai") {
-      const explicitPatronId = message.match(/(?:TEST-S\d-P\d|P-\d{6})/i)?.[0]?.toUpperCase();
+      const explicitPatronId = extractExplicitPatronId(message);
       if (explicitPatronId) {
         // “活动 Session” means an active gaming session, not engagement history.
         // Only load the heavier engagement collections when the question clearly
@@ -862,7 +944,10 @@ Separate the response into: 数据事实, 规则结论, AI 推断, 建议下一�
         content: JSON.stringify({ question: message, currentContext: body.context || {} }),
       },
     ];
-    for (let round = 0; round < 4; round += 1) {
+    // Two model turns are sufficient for the normal DeepSeek tool flow:
+    // one turn to select tools and one turn to synthesize the evidence. A
+    // longer loop is unsafe on short-lived serverless functions.
+    for (let round = 0; round < 2; round += 1) {
       const response = await fetchWithTimeout(`${provider.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -899,9 +984,12 @@ Separate the response into: 数据事实, 规则结论, AI 推断, 建议下一�
         });
       }
 
-      for (const call of assistant.tool_calls) {
+      const toolResults = await Promise.all(assistant.tool_calls.map(async (call) => ({
+        call,
+        result: await executeTool(call.function.name, call.function.arguments),
+      })));
+      for (const { call, result } of toolResults) {
         steps.push(`调用 ${call.function.name}`);
-        const result = await executeTool(call.function.name, call.function.arguments);
         sources.push(...result.sources);
         messages.push({
           role: "tool",
