@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { readLivePatronSnapshot, writeLivePatronSnapshot } from "./live-patron-cache";
 
 type Locale = "zh-Hans" | "zh-Hant" | "en";
 type Experience = "moment" | "floor" | "campaign" | "risk";
@@ -480,7 +481,7 @@ export default function CommandCenter({
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
-  const [cacheState, setCacheState] = useState<"miss" | "fresh" | "stale">("miss");
+  const [cacheState, setCacheState] = useState<"miss" | "fresh" | "stale" | "persisted">("miss");
   const refreshInFlightRef = useRef(false);
   const refreshSequenceRef = useRef(0);
   const livePatronsLoadedRef = useRef(onLivePatronsLoaded);
@@ -504,6 +505,16 @@ export default function CommandCenter({
     livePatronsLoadedRef.current = onLivePatronsLoaded;
   }, [onLivePatronsLoaded]);
 
+  // Show the last known live snapshot immediately, then replace it with the
+  // current TapData response once the request completes.
+  useEffect(() => {
+    const cached = readLivePatronSnapshot<LivePatron, SourceCounts>();
+    if (!cached) return;
+    setPatrons(cached.data);
+    if (cached.sourceCounts) setSourceCounts(cached.sourceCounts);
+    if (cached.fetchedAt) setLastUpdatedAt(new Date(cached.fetchedAt));
+  }, []);
+
   const loadLivePatrons = useCallback(async () => {
     if (refreshInFlightRef.current) return;
     const requestSequence = refreshSequenceRef.current + 1;
@@ -513,28 +524,36 @@ export default function CommandCenter({
     const controller = new AbortController();
     const requestTimer = window.setTimeout(() => controller.abort(), 15_000);
     try {
-      const response = await fetch(`/api/data/patrons?ts=${Date.now()}`, {
-        headers: { accept: "application/json", "cache-control": "no-cache" },
-        cache: "no-store",
+      const response = await fetch("/api/data/patrons", {
+        headers: { accept: "application/json" },
         signal: controller.signal,
       });
-      const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }>; fetchedAt?: string; cacheState?: "miss" | "fresh" | "stale" };
+      if (response.status === 304) {
+        if (refreshSequenceRef.current === requestSequence) setDataError("");
+        return;
+      }
+      const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }>; fetchedAt?: string; cacheState?: "miss" | "fresh" | "stale" | "persisted" };
       if (!response.ok || !result.data) throw new Error(result.error || "Unable to load live data");
       if (refreshSequenceRef.current !== requestSequence) return;
-      // Always replace the previous snapshot, including an empty response.
-      // Keeping the old array made the dashboard and detail views show stale
-      // customers after a successful refresh returned no rows.
+      // An empty response is commonly a transient upstream timeout/partial
+      // snapshot. Keep the last good data visible instead of clearing the
+      // queue on a polling tick; the next refresh will retry automatically.
+      if (!result.data.length) {
+        setDataError(result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh; keeping the last good snapshot");
+        return;
+      }
       setPatrons(result.data);
+      writeLivePatronSnapshot(result.data, result.sourceCounts, result.fetchedAt);
       livePatronsLoadedRef.current?.(result.data, result.sourceCounts || null);
       setSourceCounts(result.sourceCounts || null);
-      setDataError(result.data.length ? "" : result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh");
+      setDataError("");
       setCacheState(result.cacheState || "miss");
       setLastUpdatedAt(result.fetchedAt ? new Date(result.fetchedAt) : new Date());
       setSelectedPatronId((current) => result.data!.some((item) => item.patronId === current) ? current : result.data![0]?.patronId || patronId);
     } catch (error) {
       if (refreshSequenceRef.current === requestSequence) {
         const message = error instanceof Error && error.name === "AbortError"
-          ? tx(locale, "接口超过 15 秒未返回，已放弃本轮刷新，8 秒后自动重试。", "接口超過 15 秒未返回，已放棄本輪刷新，8 秒後自動重試。", "The API did not return within 15s; this refresh was aborted and will retry in 8s.")
+          ? tx(locale, "接口超过 15 秒未返回，已放弃本轮刷新，3 秒后自动重试。", "接口超過 15 秒未返回，已放棄本輪刷新，3 秒後自動重試。", "The API did not return within 15s; this refresh was aborted and will retry in 3s.")
           : error instanceof Error ? error.message : "Unable to load live data";
         setDataError(message);
       }
@@ -561,7 +580,7 @@ export default function CommandCenter({
 
   useEffect(() => {
     if (!autoRefresh) return undefined;
-    const timer = window.setInterval(() => void loadLivePatrons(), 8_000);
+    const timer = window.setInterval(() => void loadLivePatrons(), 3_000);
     return () => window.clearInterval(timer);
   }, [autoRefresh, loadLivePatrons]);
 
@@ -854,7 +873,7 @@ export default function CommandCenter({
                 <button type="button" onClick={() => void loadLivePatrons()} disabled={refreshing} aria-label={tx(locale, "立即刷新数据", "立即刷新數據", "Refresh data now")}>
                   <b className={refreshing ? "spinning" : ""}>↻</b>{refreshing ? tx(locale, "刷新中", "刷新中", "Refreshing") : tx(locale, "立即刷新", "立即刷新", "Refresh")}
                 </button>
-                <small>{dataError ? dataError : lastUpdatedAt ? `${cacheState === "stale" ? tx(locale, "快照于", "快照於", "Snapshot").concat(" ") : tx(locale, "更新于", "更新於", "Updated")} ${lastUpdatedAt.toLocaleTimeString(locale === "en" ? "en-US" : "zh-CN", { hour12: false })}${cacheState === "stale" ? ` · ${tx(locale, "后台刷新中", "背景刷新中", "refreshing in background")}` : ""}` : tx(locale, "正在读取实时数据", "正在讀取即時數據", "Loading live data")}</small>
+                <small>{dataError ? dataError : lastUpdatedAt ? `${cacheState === "stale" || cacheState === "persisted" ? tx(locale, "快照于", "快照於", "Snapshot").concat(" ") : tx(locale, "更新于", "更新於", "Updated")} ${lastUpdatedAt.toLocaleTimeString(locale === "en" ? "en-US" : "zh-CN", { hour12: false })}${cacheState === "stale" || cacheState === "persisted" ? ` · ${tx(locale, "后台刷新中", "背景刷新中", "refreshing in background")}` : ""}` : tx(locale, "正在读取实时数据", "正在讀取即時數據", "Loading live data")}</small>
               </div>
               <div className="head-live-stats"><span><i />LIVE</span><b>{activePatrons}</b><small>{tx(locale, "在场客户", "在場客戶", "active patrons")}</small></div>
             </div>
@@ -873,7 +892,7 @@ export default function CommandCenter({
                   <div className="top-table-list">{topTables.map((table, index) => <button key={table.id} type="button" onClick={() => { setSelectedTableId(table.id); setActiveView("floor"); }}><b>0{index + 1}</b><span><strong>{table.id} · {table.game}</strong><i><em style={{ width: `${Math.min(100, (table.patrons / Math.max(topTables[0]?.patrons || 1, 1)) * 100)}%` }} /></i></span><mark>{table.patrons}</mark></button>)}</div>
                 </article>
                 <article className="overview-card zone-card"><div className="overview-card-head"><div><span>ZONE SIGNAL</span><h3>{tx(locale, "区域热度", "區域熱度", "Zone activity")}</h3></div></div><div className="zone-bars">{Object.entries(zoneTotals).sort((a, b) => b[1] - a[1]).map(([zone, count]) => <div key={zone}><span>ZONE {zone}</span><i><em style={{ width: `${Math.min(100, count / Math.max(Number(hottestZone[1]), 1) * 100)}%` }} /></i><strong>{count}</strong></div>)}</div></article>
-                <article className="overview-card live-floor-card"><div className="overview-card-head"><div><span>FLOOR PULSE</span><h3>{tx(locale, "实时桌台缩略图", "即時桌台縮略圖", "Live floor pulse")}</h3></div><small>{tx(locale, "每 8 秒读取接口", "每 8 秒讀取接口", "API refresh every 8s")}</small></div><div className="mini-floor-grid">{tables.slice(0, 20).map((table) => <button type="button" key={table.id} className={table.state} onClick={() => { setSelectedTableId(table.id); setActiveView("floor"); }}><span>{table.id.replace("T-00", "T")}</span><strong>{table.patrons}</strong><i style={{ height: `${Math.max(6, Math.min(table.occupancy, 100))}%` }} /></button>)}</div></article>
+              <article className="overview-card live-floor-card"><div className="overview-card-head"><div><span>FLOOR PULSE</span><h3>{tx(locale, "实时桌台缩略图", "即時桌台縮略圖", "Live floor pulse")}</h3></div><small>{tx(locale, "每 3 秒读取接口", "每 3 秒讀取接口", "API refresh every 3s")}</small></div><div className="mini-floor-grid">{tables.slice(0, 20).map((table) => <button type="button" key={table.id} className={table.state} onClick={() => { setSelectedTableId(table.id); setActiveView("floor"); }}><span>{table.id.replace("T-00", "T")}</span><strong>{table.patrons}</strong><i style={{ height: `${Math.max(6, Math.min(table.occupancy, 100))}%` }} /></button>)}</div></article>
                 <article className="overview-card ai-brief-card"><div className="overview-card-head"><div><span>AI BRIEF</span><h3>{tx(locale, "现在最值得处理", "現在最值得處理", "What matters now")}</h3></div><b>3</b></div><div className="brief-list"><button type="button" onClick={() => { setExperience("floor"); setActiveView("chat"); setPrompt(defaultPrompt(locale, "floor", selectedPatronId, topTables[0]?.id || selectedTableId)); }}><i className="risk" />{tx(locale, `${topTables[0]?.id || "—"} 客流最高，需要检查容量与服务资源。`, `${topTables[0]?.id || "—"} 客流最高，需要檢查容量與服務資源。`, `${topTables[0]?.id || "—"} has the highest traffic; review capacity and service resources.`)}<span>↗</span></button><button type="button" onClick={() => { setExperience("risk"); setActiveView("chat"); setPrompt(defaultPrompt(locale, "risk", selectedPatronId, selectedTableId)); }}><i className="warning" />{tx(locale, `${riskPatrons} 位客户存在活动风险信号。`, `${riskPatrons} 位客戶存在活動風險訊號。`, `${riskPatrons} patrons have active risk signals.`)}<span>↗</span></button><button type="button" onClick={() => setActiveView("scenarios")}><i />{tx(locale, "可以注入场景，现场演示数据变化如何驱动 AI 决策。", "可以注入場景，現場演示數據變化如何驅動 AI 決策。", "Inject a scenario to show how data changes drive AI decisions.")}<span>↗</span></button></div></article>
               </div>
             </section>}
@@ -1019,7 +1038,7 @@ export default function CommandCenter({
               </div>
               {selectedTablePatrons.length || selectedTableSimulatedSessions.length ? (
                 <div className="table-ai-patron-list">
-                  {selectedTablePatrons.slice(0, 8).map((item) => {
+                  {selectedTablePatrons.slice(0, 25).map((item) => {
                     const session = item.activeSession;
                     const tags = [...new Set([item.tier, item.region, ...item.preferredGames.slice(0, 2), ...(session?.behaviorTags || []), ...item.riskFlags].filter(Boolean))];
                     return (
@@ -1046,7 +1065,7 @@ export default function CommandCenter({
                       </button>
                     );
                   })}
-                  {selectedTableSimulatedSessions.slice(0, Math.max(0, 8 - selectedTablePatrons.length)).map((session) => (
+                  {selectedTableSimulatedSessions.slice(0, Math.max(0, 25 - selectedTablePatrons.length)).map((session) => (
                     <article className="local" key={session.id}>
                       <span className="table-ai-avatar">SIM</span>
                       <div className="table-ai-patron-main">

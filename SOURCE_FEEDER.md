@@ -42,26 +42,43 @@ Write one cross-system customer event package:
 npm run source:feed:once
 ```
 
-Write continuously every 15 seconds:
+Write continuously using the interval in `.env.source-feeder` (the current demo configuration is one 5-second cycle with at most three customers):
 
 ```bash
 npm run source:feed
 ```
 
-Run a bounded local feeder for 10 hours, one batch every 15 seconds:
+Run a bounded local feeder for 10 hours, at most three logical customer packages every five seconds:
 
 ```bash
-node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=15000 --start-player-id=109000 --pool-size=350 --active-limit=220 --duration-hours=10 --max-events=2400
+node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=3000 --batch-size=5 --start-player-id=109000 --pool-size=350 --active-limit=220 --max-active=350 --max-table-visible=25 --risk-ratio=0.02 --duration-hours=10 --max-events=12000
 ```
 
-For the demo run, `--pool-size=350` means the script rotates through a stable pool of up to 350 demo patrons. `--active-limit=220` keeps the live floor busy but leaves a visible inactive customer population for Customer 360. The first pass creates new customers; later passes update the same source records. Some patrons are periodically marked inactive, so TapData CDC sees both arrivals and departures without creating an uncontrolled number of active VIPs.
+For the demo run, `--pool-size=350` means the script rotates through a stable pool of up to 350 demo patrons. `--active-limit=220` keeps the live floor busy but leaves a visible inactive customer population for Customer 360; the hard safety ceiling remains `--max-active=350`. The first pass creates new customers; later passes update the same source records. Each 5-second cycle handles at most three logical customer packages across the three sources and logs `arrive`, `refresh`, or `depart`, so TapData CDC sees gradual changes instead of a bulk update. The table targets total 220 and each table target is at most 25 visible patrons (seated guests plus observers).
 
 The table assignment uses a controlled heat distribution: a few tables become naturally hot, some remain quiet or empty, VIP patrons lean toward VIP tables, and no table is allowed to exceed 25 visible patrons including seated guests and standing observers.
+
+### Runtime write guarantee
+
+The continuous feeder is deliberately **not** a bulk synchronizer. One 5-second cycle writes at most three independent patron packages across the three source systems, then performs at most one risk-case closure. It does not re-write every table or every active session. This keeps CDC traffic gradual and makes logs easy to audit:
+
+```text
+[09:30:00] normal P0000105001 ... active@T-0008 OK transition=arrive
+Wrote PostgreSQL_Loyalty_CRM.
+Wrote Oracle_Gaming_Core.
+Wrote MSSQL_Hotel_Ops.
+```
+
+If old generated sessions need a one-off capacity reconciliation before a rehearsal, run this explicitly while the normal feeder is stopped. It can update historical source rows, so it is never performed by a normal tick:
+
+```bash
+node scripts/realtime-source-feeder.mjs --once --reconcile-floor --start-player-id=105000 --pool-size=350 --active-limit=220
+```
 
 If previous demo runs left too many active patrons on the floor, retire that old generated range before starting the new run:
 
 ```bash
-node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=15000 --start-player-id=109000 --pool-size=350 --active-limit=220 --duration-hours=10 --max-events=2400 --retire-player-range=105000-108999
+node scripts/realtime-source-feeder.mjs --scenario=mixed --interval=30000 --start-player-id=109000 --pool-size=350 --active-limit=220 --max-active=350 --max-table-visible=25 --risk-ratio=0.02 --duration-hours=10 --max-events=1200 --retire-player-range=105000-108999
 ```
 
 This does not delete source records. It only marks old generated Oracle table sessions inactive and closes old generated MSSQL risk cases / alerts so the AI panel stops counting stale activity.
@@ -75,10 +92,11 @@ node scripts/realtime-source-feeder.mjs --start-player-id=106000
 node scripts/realtime-source-feeder.mjs --batch-size=3
 node scripts/realtime-source-feeder.mjs --duration-hours=2
 node scripts/realtime-source-feeder.mjs --pool-size=350 --active-limit=220
+node scripts/realtime-source-feeder.mjs --max-active=350 --max-table-visible=25 --risk-ratio=0.02
 node scripts/realtime-source-feeder.mjs --retire-player-range=105000-108999 --once
 ```
 
-By default, real writes require all three source connections to be configured. For one-source troubleshooting only:
+By default, real writes require all three source connections to be configured. The risk guardrail reconciles active responsible-play cases to approximately 2% of the active floor population. For one-source troubleshooting only:
 
 ```bash
 FEEDER_ALLOW_PARTIAL=true npm run source:feed:once

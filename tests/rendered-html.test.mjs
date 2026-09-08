@@ -81,7 +81,7 @@ test("keeps delivery governed and connection secrets out of the client", async (
   assert.match(commandCenter, /ENTER 提交/);
   assert.match(commandCenter, /customer-filter-popover/);
   assert.match(commandCenter, /客户筛选/);
-  assert.match(commandCenter, /setInterval\(\(\) => void loadLivePatrons\(\), 8_000\)/);
+  assert.match(commandCenter, /setInterval\(\(\) => void loadLivePatrons\(\), 3_000\)/);
   assert.match(commandCenter, /refreshInFlightRef/);
   assert.match(commandCenter, /patron_realtime_decision_signals/);
   assert.match(commandCenter, /scenarioCdcPayload/);

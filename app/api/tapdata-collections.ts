@@ -27,6 +27,12 @@ const DEFAULT_COLLECTION_MAP: Record<string, string> = {
 let cachedRawMap: string | undefined;
 let cachedCollectionMap: Record<string, string> | null = null;
 
+function normalizePublishedCollectionName(value: string) {
+  // Published service names cannot end with a brace. Strip a trailing brace
+  // so a typo such as `gaming_table_state}` cannot become `%7D` in the URL.
+  return value.trim().replace(/}+$/g, "");
+}
+
 function parseCollectionMap(raw: string | undefined) {
   if (!raw?.trim()) return DEFAULT_COLLECTION_MAP;
   if (cachedCollectionMap && cachedRawMap === raw) return cachedCollectionMap;
@@ -37,9 +43,9 @@ function parseCollectionMap(raw: string | undefined) {
   try {
     const value = JSON.parse(trimmed) as unknown;
     if (value && typeof value === "object" && !Array.isArray(value)) {
-      parsed = Object.fromEntries(Object.entries(value as Record<string, unknown>)
-        .filter(([, apiName]) => typeof apiName === "string" && apiName.trim())
-        .map(([logicalName, apiName]) => [logicalName.trim(), String(apiName).trim()]));
+        parsed = Object.fromEntries(Object.entries(value as Record<string, unknown>)
+          .filter(([, apiName]) => typeof apiName === "string" && apiName.trim())
+        .map(([logicalName, apiName]) => [logicalName.trim(), normalizePublishedCollectionName(String(apiName))]));
     }
   } catch {
     parsed = Object.fromEntries(trimmed
@@ -48,7 +54,7 @@ function parseCollectionMap(raw: string | undefined) {
       .filter(Boolean)
       .map((entry) => entry.split(/[:=]/).map((part) => part.trim()))
       .filter((parts): parts is [string, string] => parts.length >= 2 && Boolean(parts[0]) && Boolean(parts[1]))
-      .map(([logicalName, apiName]) => [logicalName, apiName]));
+      .map(([logicalName, apiName]) => [logicalName, normalizePublishedCollectionName(apiName)]));
   }
 
   cachedRawMap = raw;
@@ -58,12 +64,19 @@ function parseCollectionMap(raw: string | undefined) {
 
 export function tapDataApiCollection(logicalCollection: string) {
   const map = parseCollectionMap(process.env.TAPDATA_COLLECTION_MAP);
-  return map[logicalCollection] || logicalCollection;
+  return normalizePublishedCollectionName(map[logicalCollection] || logicalCollection);
 }
 
 export function tapDataCollectionUrl(baseUrl: string, findPathTemplate: string, logicalCollection: string) {
   const apiCollection = tapDataApiCollection(logicalCollection);
-  const path = findPathTemplate.replace("{collection}", encodeURIComponent(apiCollection));
+  // Be tolerant of a common TapData env typo such as
+  // `/api/v1/{collection}/find}`. Without normalization the stray closing
+  // brace is URL-encoded as `%7D`, producing a guaranteed 404 from TapData.
+  const normalizedTemplate = findPathTemplate
+    .trim()
+    .replace(/\{collection\}\}?/gi, "{collection}")
+    .replace(/\/find\}+$/i, "/find");
+  const path = normalizedTemplate.replace("{collection}", encodeURIComponent(apiCollection));
   return /^https?:\/\//i.test(path) ? path : `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 }
 

@@ -53,7 +53,7 @@ cp .env.source-feeder.example .env.source-feeder
 npm run source:feed
 ```
 
-The feeder writes one logical casino customer across the three source systems every 15 seconds by default. TapData CDC can then capture the changes, merge them into MongoDB MDM collections, publish APIs, and refresh the AI panel. See `SOURCE_FEEDER.md` for the full runbook.
+The feeder writes one small logical casino-customer change across the three source systems every 3 seconds by default for fast demos. Each cycle is capped at three customers; TapData CDC can then capture the changes, merge them into MongoDB MDM collections, publish APIs, and refresh the AI panel. See `SOURCE_FEEDER.md` for the full runbook.
 
 ## Configure DeepSeek AI and TapData APIs
 

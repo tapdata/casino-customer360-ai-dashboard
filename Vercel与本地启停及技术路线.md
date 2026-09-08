@@ -56,7 +56,7 @@ AI_BASE_URL=https://api.deepseek.com
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 
 TAPDATA_API_BASE_URL=http://<tapdata-host>:3080
-TAPDATA_FIND_PATH_TEMPLATE=/api/v2/{collection}/find
+TAPDATA_FIND_PATH_TEMPLATE=/api/v1/{collection}/find
 TAPDATA_TOKEN_URL=http://<tapdata-host>:3030/oauth/token
 TAPDATA_CLIENT_ID=你的客户端ID
 TAPDATA_CLIENT_SECRET=你的客户端密钥
@@ -64,7 +64,7 @@ TAPDATA_TOKEN_AUTH_METHOD=client_secret_post
 TAPDATA_SCAN_LIMIT=5000
 ```
 
-`TAPDATA_API_BASE_URL` 只填写基础地址，不要把 `/api/v2/...` 重复写进去。具体表名由 `{collection}` 自动替换。
+`TAPDATA_API_BASE_URL` 只填写基础地址，不要把 `/api/v1/...` 重复写进去。具体表名由 `{collection}` 自动替换。
 
 ### 2. 本地造数脚本配置
 
@@ -277,7 +277,7 @@ DEEPSEEK_API_KEY=********
 
 ```env
 TAPDATA_API_BASE_URL=http://<tapdata-host>:3080
-TAPDATA_FIND_PATH_TEMPLATE=/api/v2/{collection}/find
+TAPDATA_FIND_PATH_TEMPLATE=/api/v1/{collection}/find
 TAPDATA_TOKEN_URL=http://<tapdata-host>:3030/oauth/token
 TAPDATA_CLIENT_ID=********
 TAPDATA_CLIENT_SECRET=********
@@ -307,7 +307,7 @@ app/api/data/patrons/route.ts
 
 ```text
 获取 OAuth Token
-→ 使用 Bearer Token 调用 /api/v2/{collection}/find
+→ 使用 Bearer Token 调用 /api/v1/{collection}/find
 → 读取多个 MDM 集合
 → 合并为 Customer 360
 → 返回 JSON 给前端

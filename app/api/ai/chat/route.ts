@@ -25,6 +25,9 @@ type EvidenceSource = {
 
 const DEFAULT_TAPDATA_FIND_PATH_TEMPLATE = "/api/v1/{collection}/find";
 
+export const preferredRegion = "hkg1";
+export const maxDuration = 20;
+
 type ToolCall = {
   id: string;
   type: "function";

@@ -32,16 +32,27 @@ const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
 const once = args.has("--once") || dryRun;
 const scenarioArg = valueArg("--scenario") || process.env.FEEDER_SCENARIO || "mixed";
-const intervalMs = Number(valueArg("--interval") || process.env.FEEDER_INTERVAL_MS || 15000);
+const intervalMs = Number(valueArg("--interval") || process.env.FEEDER_INTERVAL_MS || 30000);
 const startPlayerId = Number(valueArg("--start-player-id") || process.env.FEEDER_START_PLAYER_ID || 105000);
 const maxEvents = Number(valueArg("--max-events") || process.env.FEEDER_MAX_EVENTS || 0);
 const durationHours = Number(valueArg("--duration-hours") || process.env.FEEDER_DURATION_HOURS || 0);
-const batchSize = Math.max(1, Number(valueArg("--batch-size") || process.env.FEEDER_BATCH_SIZE || 1));
-const activePatronLimit = Math.max(1, Number(valueArg("--active-limit") || process.env.FEEDER_ACTIVE_PATRON_LIMIT || 220));
+// The live simulator is intentionally bounded.  Each short cycle may touch
+// at most five customers, regardless of an accidental oversized CLI/env
+// value, so the CDC demonstration never turns into a burst load.
+const requestedBatchSize = Number(valueArg("--batch-size") || process.env.FEEDER_BATCH_SIZE || 1);
+const batchSize = Math.min(5, Math.max(1, requestedBatchSize));
+const maxActivePatrons = Math.min(350, Math.max(1, Number(valueArg("--max-active") || process.env.FEEDER_MAX_ACTIVE_PATRONS || 350)));
+const activePatronLimit = Math.min(maxActivePatrons, Math.max(1, Number(valueArg("--active-limit") || process.env.FEEDER_ACTIVE_PATRON_LIMIT || 220)));
 const poolSize = Math.max(0, Number(valueArg("--pool-size") || process.env.FEEDER_POOL_SIZE || activePatronLimit));
+const riskRatio = Math.min(0.1, Math.max(0, Number(valueArg("--risk-ratio") || process.env.FEEDER_RISK_RATIO || 0.02)));
+const maxVisiblePerTable = Math.min(25, Math.max(1, Number(valueArg("--max-table-visible") || process.env.FEEDER_MAX_TABLE_VISIBLE || 25)));
 const managedPlayerStart = Number(valueArg("--managed-player-start") || process.env.FEEDER_MANAGED_PLAYER_START || 100000);
 const managedPlayerEnd = Number(valueArg("--managed-player-end") || process.env.FEEDER_MANAGED_PLAYER_END || 119999);
 const retirePlayerRange = valueArg("--retire-player-range") || process.env.FEEDER_RETIRE_PLAYER_RANGE || "";
+// A full-floor reconciliation is intentionally opt-in.  It may update many
+// historical source rows and therefore must never run as part of the normal
+// 15/30-second live feed.
+const reconcileFloor = args.has("--reconcile-floor");
 const allowPartial = args.has("--allow-partial") || process.env.FEEDER_ALLOW_PARTIAL === "true";
 
 const floorTables = [
@@ -116,6 +127,10 @@ const plannedActiveSeats = floorTables.flatMap((table) => {
 }).sort((left, right) => left.seatIndex - right.seatIndex || left.table[0].localeCompare(right.table[0]));
 
 const effectiveActivePatronLimit = Math.min(activePatronLimit, plannedActiveSeats.length);
+
+if (plannedActiveSeats.length > maxActivePatrons) {
+  throw new Error(`Configured table targets require ${plannedActiveSeats.length} active patrons, above the hard limit of ${maxActivePatrons}. Lower targetSeatsByTable or increase the limit up to 350.`);
+}
 
 function valueArg(name) {
   const prefix = `${name}=`;
@@ -230,7 +245,7 @@ function tableWeight(table, playerOrdinal, scenario) {
 
 function oracleTableTargetCountCase(tableExpr = "TABLE_ID") {
   const clauses = Object.entries(targetSeatsByTable)
-    .map(([tableId, count]) => `WHEN '${tableId}' THEN ${Math.min(25, Math.max(0, count))}`)
+    .map(([tableId, count]) => `WHEN '${tableId}' THEN ${Math.min(maxVisiblePerTable, Math.max(0, count))}`)
     .join(" ");
   return `CASE ${tableExpr} ${clauses} ELSE 0 END`;
 }
@@ -251,9 +266,9 @@ function tableFor(playerOrdinal, scenario) {
   return floorTables.at(-1);
 }
 
-function buildPerson(seq) {
+function buildPerson(seq, options = {}) {
   const scenario = scenarioFor(seq);
-  const playerOrdinal = poolSize > 0 ? ((seq - 1) % poolSize) + 1 : seq;
+  const playerOrdinal = options.playerOrdinal ?? (poolSize > 0 ? ((seq - 1) % poolSize) + 1 : seq);
   const playerNumber = startPlayerId + playerOrdinal;
   const playerId = String(playerNumber);
   const masterPlayerId = `P${pad(playerNumber, 10)}`;
@@ -266,7 +281,7 @@ function buildPerson(seq) {
   const region = pick(["Macau", "Hong Kong", "Singapore", "Taiwan", "Mainland China"], seq);
   const preferredGame = game === "BAC" ? "Baccarat" : game === "ROU" ? "Roulette" : game === "BLA" ? "Blackjack" : game === "POK" ? "Poker" : "Sic Bo";
   const preferredBenefits = scenario === "risk" ? ["HostCare"] : tier === "Diamond" ? ["SuiteUpgrade", "LateCheckout", "FineDining"] : ["Dining", "Points"];
-  const active = scenario !== "inactive" && playerOrdinal <= effectiveActivePatronLimit;
+  const active = options.active ?? (scenario !== "inactive" && playerOrdinal <= effectiveActivePatronLimit);
   const risky = scenario === "risk";
   const riskFlags = risky ? ["ResponsiblePlayReview"] : scenario === "offer_fatigue" ? ["OfferFatigue"] : [];
   const behaviorTags = risky
@@ -609,7 +624,12 @@ class OracleSink {
         UPDATED_AT: oracleTimestamp(person.created),
       });
     }
-    await this.normalizeFloor();
+    // Do not normalize the whole gaming floor here.  A previous implementation
+    // updated every managed session and all 30 table states on every tick,
+    // which generated a burst of CDC events although the feeder was configured
+    // to handle one customer at a time.  Normal live operation only writes the
+    // current customer's source records.  Use --reconcile-floor explicitly
+    // before a rehearsal when a one-time historical cleanup is required.
   }
 
   async normalizeFloor() {
@@ -953,7 +973,7 @@ async function maintainRiskRatio(sinks) {
   const activePlayers = activeResult.rows.map((row) => String(row.PLAYER_ID));
   if (activePlayers.length === 0) return;
 
-  const targetRiskCount = Math.max(1, Math.round(activePlayers.length * 0.02));
+  const targetRiskCount = Math.max(1, Math.round(activePlayers.length * riskRatio));
   const activeSet = new Set(activePlayers);
   const riskRows = (
     await mssqlSink.pool
@@ -972,7 +992,13 @@ async function maintainRiskRatio(sinks) {
     .slice(0, targetRiskCount)
     .map((row) => String(row.player_id));
   const keepSet = new Set(keepPlayers);
-  const closePlayers = riskRows.map((row) => String(row.player_id)).filter((playerId) => !keepSet.has(playerId));
+  // Keep the live feeder gradual: close no more than one stale/excess risk
+  // case per tick.  This avoids converting a 2% safety guardrail into a batch
+  // CDC update when old demo data exists.
+  const closePlayers = riskRows
+    .map((row) => String(row.player_id))
+    .filter((playerId) => !keepSet.has(playerId))
+    .slice(0, 1);
   if (closePlayers.length === 0) return;
 
   const closeCaseRequest = mssqlSink.pool.request();
@@ -1020,15 +1046,39 @@ async function maintainRiskRatio(sinks) {
     { autoCommit: false },
   );
   await oracleSink.connection.commit();
-  console.log(`Risk guardrail normalized active risks: target=${targetRiskCount}, closed=${closePlayers.length}.`);
+  console.log(`Risk guardrail normalized active risks: target=${targetRiskCount} (${(riskRatio * 100).toFixed(1)}%), closed=${closePlayers.length}.`);
+}
+
+const seenPlayers = new Set();
+// Keep the demo realistic while still making changes visible: each cycle
+// toggles a small random set of existing customers instead of continuously
+// creating new IDs. The active floor remains bounded by the configured limit.
+const activeOrdinals = new Set(Array.from({ length: effectiveActivePatronLimit }, (_, index) => index + 1));
+
+function pickStatusChanges() {
+  const requested = 1 + Math.floor(Math.random() * batchSize);
+  const selected = new Set();
+  while (selected.size < requested) {
+    const ordinal = poolSize > 0 ? 1 + Math.floor(Math.random() * poolSize) : seq;
+    if (poolSize <= 0 || !selected.has(ordinal)) selected.add(ordinal);
+  }
+  return [...selected].map((ordinal) => {
+    const currentlyActive = activeOrdinals.has(ordinal);
+    const nextActive = currentlyActive ? false : activeOrdinals.size < effectiveActivePatronLimit;
+    if (nextActive) activeOrdinals.add(ordinal);
+    else if (currentlyActive) activeOrdinals.delete(ordinal);
+    return { ordinal, active: nextActive };
+  });
 }
 
 function printPlan(person) {
   console.log(
     `[${new Date().toLocaleTimeString()}] ${person.scenario} ${person.masterPlayerId} ` +
       `Oracle:${person.playerId} MSSQL:${person.guestId} PG:${person.customerId}/${person.posMemberNo} ` +
-      `${person.active ? `active@${person.tableId}` : "inactive"} ${person.risky ? "RISK" : "OK"}`,
+      `${person.active ? `active@${person.tableId}` : "inactive"} ${person.risky ? "RISK" : "OK"} ` +
+      `transition=${seenPlayers.has(person.playerId) ? (person.active ? "refresh" : "depart") : (person.active ? "arrive" : "inactive-seed")}`,
   );
+  seenPlayers.add(person.playerId);
 }
 
 let seq = Number(valueArg("--seq") || 1);
@@ -1044,7 +1094,8 @@ async function main() {
   const stopAt = durationMs > 0 ? Date.now() + durationMs : 0;
   console.log(
     `Real-time source feeder starting. scenario=${scenarioArg}, interval=${intervalMs}ms, ` +
-      `batchSize=${batchSize}, poolSize=${poolSize || "unbounded"}, activeLimit=${activePatronLimit}, durationHours=${durationHours || "unbounded"}, ` +
+      `batchSize=${batchSize}, poolSize=${poolSize || "unbounded"}, activeLimit=${activePatronLimit}/${maxActivePatrons}, ` +
+      `tableCap=${maxVisiblePerTable}, riskRatio=${(riskRatio * 100).toFixed(1)}%, durationHours=${durationHours || "unbounded"}, ` +
       `dryRun=${dryRun}, maxEvents=${maxEvents || "unbounded"}`,
   );
   const sinks = dryRun ? [] : await connectSinks();
@@ -1055,11 +1106,20 @@ async function main() {
       await sink.retirePlayerRange(rangeToRetire);
     }
   }
+  if (reconcileFloor) {
+    const oracleSink = sinks.find((sink) => sink instanceof OracleSink);
+    if (!oracleSink) throw new Error("--reconcile-floor requires the Oracle Gaming Core connection.");
+    console.log("Running one-time floor reconciliation (this is intentionally not part of normal live ticks)...");
+    await oracleSink.normalizeFloor();
+    await oracleSink.connection.commit();
+    console.log("One-time floor reconciliation completed.");
+  }
   let writtenEvents = 0;
   try {
     do {
-      for (let batchIndex = 0; batchIndex < batchSize; batchIndex += 1) {
-        const person = buildPerson(seq++);
+      const statusChanges = pickStatusChanges();
+      for (const change of statusChanges) {
+        const person = buildPerson(seq++, { playerOrdinal: change.ordinal, active: change.active });
         printPlan(person);
         if (!dryRun) {
           for (const sink of sinks) {
@@ -1082,9 +1142,6 @@ async function main() {
           }
         }
         writtenEvents += 1;
-        if (!dryRun && writtenEvents % 10 === 0) {
-          await maintainRiskRatio(sinks);
-        }
         if (maxEvents > 0 && writtenEvents >= maxEvents) {
           console.log(`Reached maxEvents=${maxEvents}. Stopping source feeder.`);
           break;
@@ -1092,6 +1149,12 @@ async function main() {
       }
       if (maxEvents > 0 && writtenEvents >= maxEvents) {
         break;
+      }
+      // One safety reconciliation per short cycle, not once per customer.
+      // With a three-customer cap this guarantees that risk normalization
+      // cannot become a hidden batch operation.
+      if (!dryRun) {
+        await maintainRiskRatio(sinks);
       }
       if (stopAt > 0 && Date.now() >= stopAt) {
         console.log(`Reached durationHours=${durationHours}. Stopping source feeder.`);

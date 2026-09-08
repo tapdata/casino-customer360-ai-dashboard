@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import CommandCenter from "./command-center";
+import { readLivePatronSnapshot, writeLivePatronSnapshot } from "./live-patron-cache";
 
 type Locale = "zh-Hans" | "zh-Hant" | "en";
 
@@ -750,7 +751,7 @@ const zhText = {
   replay: "重新播放",
   collections: "5 个集合",
   records: "32 条记录",
-  freshness: "8 秒新鲜度",
+  freshness: "3 秒新鲜度",
   observedCount: "3 条已观测事实",
   inferredCount: "3 条推断洞察",
   recommendedCount: "1 个推荐动作",
@@ -1398,6 +1399,20 @@ export default function Home() {
     document.documentElement.lang = locale;
   }, [locale]);
 
+  // Hydrate the shell with the last successful snapshot while the first live
+  // request is in flight. This avoids a blank dashboard during a cold start
+  // or a transient TapData delay; a successful response always replaces it.
+  useEffect(() => {
+    if (primaryView !== "customers") return;
+    const cached = readLivePatronSnapshot<LivePatron, LiveSourceCounts>();
+    if (!cached) return;
+    const timer = window.setTimeout(() => {
+      setLivePatrons(cached.data);
+      if (cached.sourceCounts) setLiveSourceCounts(cached.sourceCounts);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [primaryView]);
+
   useEffect(() => {
     if (primaryView !== "customers") return undefined;
     let cancelled = false;
@@ -1407,35 +1422,46 @@ export default function Home() {
     async function loadLivePatrons() {
       try {
         setLiveDataError("");
-        const response = await fetch(`/api/data/patrons?ts=${Date.now()}`, {
-          headers: { accept: "application/json", "cache-control": "no-cache" },
-          cache: "no-store",
+        const response = await fetch("/api/data/patrons", {
+          headers: { accept: "application/json" },
           signal: controller.signal,
         });
-        const result = await response.json() as { data?: LivePatron[]; sourceCounts?: LiveSourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }> };
+        if (response.status === 304) {
+          if (!cancelled && requestSequence === liveRefreshTick) setLiveDataError("");
+          return;
+        }
+        const result = await response.json() as { data?: LivePatron[]; sourceCounts?: LiveSourceCounts; fetchedAt?: string; error?: string; warnings?: Array<{ collection: string; message: string }> };
         if (!response.ok || !result.data) throw new Error(result.error || "No live patron data returned");
         if (cancelled) return;
         if (requestSequence !== liveRefreshTick) return;
-        // A zero-row response is treated as a failed/empty live snapshot at
-        // this shell level so the fallback story remains render-safe. The
-        // command center itself still replaces its queue with the empty set.
-        setLivePatrons(result.data.length ? result.data : null);
+        // Never replace a known-good snapshot with an empty response. A
+        // transient TapData/Vercel timeout can otherwise make the whole
+        // customer surface disappear during the next polling tick. Keep the
+        // previous data visible and retry in the background; only a non-empty
+        // response is allowed to become the new browser snapshot.
+        if (!result.data.length) {
+          setLiveDataError(result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh; keeping the last good snapshot");
+          return;
+        }
+        const nextPatrons = result.data;
+        setLivePatrons(nextPatrons);
         if (result.sourceCounts) setLiveSourceCounts(result.sourceCounts);
-        setLiveDataError(result.data.length ? "" : result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh");
+        writeLivePatronSnapshot(nextPatrons, result.sourceCounts, result.fetchedAt);
+        setLiveDataError("");
         setSelectedId((current) => {
           const pending = pendingDecisionSelectionRef.current;
           if (pending) {
-            if (result.data?.some((patron) => patron.patronId === pending)) pendingDecisionSelectionRef.current = null;
+            if (nextPatrons.some((patron) => patron.patronId === pending)) pendingDecisionSelectionRef.current = null;
             return pending;
           }
-          return result.data?.some((patron) => patron.patronId === current)
+          return nextPatrons.some((patron) => patron.patronId === current)
             ? current
-            : result.data?.[0]?.patronId ?? current;
+            : nextPatrons[0]?.patronId ?? current;
         });
       } catch (error) {
         if (!cancelled) {
           const message = error instanceof Error && error.name === "AbortError"
-            ? (locale === "en" ? "The API did not return within 15s; this refresh was skipped and will retry in 8s." : locale === "zh-Hant" ? "接口超過 15 秒未返回，已跳過本輪刷新，8 秒後自動重試。" : "接口超过 15 秒未返回，已跳过本轮刷新，8 秒后自动重试。")
+            ? (locale === "en" ? "The API did not return within 15s; this refresh was skipped and will retry in 3s." : locale === "zh-Hant" ? "接口超過 15 秒未返回，已跳過本輪刷新，3 秒後自動重試。" : "接口超过 15 秒未返回，已跳过本轮刷新，3 秒后自动重试。")
             : error instanceof Error ? error.message : "Unable to load live patrons";
           setLiveDataError(message);
         }
@@ -1453,7 +1479,7 @@ export default function Home() {
 
   useEffect(() => {
     if (primaryView !== "customers") return undefined;
-    const timer = window.setInterval(() => setLiveRefreshTick((tick) => tick + 1), 8_000);
+    const timer = window.setInterval(() => setLiveRefreshTick((tick) => tick + 1), 3_000);
     return () => window.clearInterval(timer);
   }, [primaryView]);
 
@@ -2269,7 +2295,11 @@ export default function Home() {
         locale={locale}
         patronId={snapshot.patronId}
         onLivePatronsLoaded={(patrons, sourceCounts) => {
-          setLivePatrons(patrons.length ? patrons : null);
+          // CommandCenter already filters empty/partial responses. Keep this
+          // guard at the shell boundary as well so a future caller cannot
+          // clear the global dashboard snapshot with a transient empty list.
+          if (!patrons.length) return;
+          setLivePatrons(patrons);
           if (sourceCounts) setLiveSourceCounts(sourceCounts);
           setLiveDataError("");
         }}
