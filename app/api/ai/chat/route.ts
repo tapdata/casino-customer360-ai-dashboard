@@ -30,7 +30,10 @@ const DEFAULT_TAPDATA_FIND_PATH_TEMPLATE = "/api/v1/{collection}/find";
 // envelope even when an upstream provider returns a non-JSON response.
 export const runtime = "nodejs";
 export const preferredRegion = "hkg1";
-export const maxDuration = 20;
+// The Vercel Hobby plan may terminate a function at roughly ten seconds.
+// Keep this handler below that ceiling instead of letting the platform return
+// FUNCTION_INVOCATION_TIMEOUT after the client has already waited.
+export const maxDuration = 10;
 
 type ToolCall = {
   id: string;
@@ -342,7 +345,7 @@ function tokenFromPayload(payload: unknown) {
   return typeof value === "string" && value ? { value, expiresIn: Number.isFinite(expiresIn) ? expiresIn : 300 } : null;
 }
 
-async function tapDataAccessToken(config: TapDataConfig) {
+async function tapDataAccessToken(config: TapDataConfig, timeoutMs = 12_000) {
   if (config.accessToken) return config.accessToken;
   if (cachedTapDataToken && cachedTapDataToken.expiresAt > Date.now() + 60_000) return cachedTapDataToken.value;
   if (!config.tokenUrl || !config.clientId || !config.clientSecret) throw new Error("TapData OAuth is not configured");
@@ -362,7 +365,7 @@ async function tapDataAccessToken(config: TapDataConfig) {
       form.set("client_id", clientId);
       form.set("client_secret", clientSecret);
     }
-    const response = await fetchWithTimeout(config.tokenUrl!, { method: "POST", headers, body: form.toString() });
+    const response = await fetchWithTimeout(config.tokenUrl!, { method: "POST", headers, body: form.toString() }, timeoutMs);
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 240);
       throw new Error(`TapData token request failed (${response.status}): ${detail}`);
@@ -388,17 +391,20 @@ async function tapDataFind(collection: string, filter: Record<string, unknown>, 
   projection?: Record<string, number>;
   sort?: Record<string, number>;
   limit?: number;
+  scanLimit?: number;
+  requestTimeoutMs?: number;
+  tokenTimeoutMs?: number;
 } = {}) {
   if (!allowedCollections.has(collection)) throw new Error("Collection is not allowed");
   const config = tapDataConfig();
   if (!config) throw new Error("TapData is not configured");
-  const token = await tapDataAccessToken(config);
+  const token = await tapDataAccessToken(config, options.tokenTimeoutMs ?? 12_000);
   const requestedLimit = clampLimit(options.limit);
   // The published demo endpoints currently accept `filter` but return an
   // unfiltered page. Scan the bounded demo collection and enforce the same
   // allowlisted filter locally so unrelated patron data is never sent to AI.
   const needsLocalScan = Object.keys(filter).length > 0 || Boolean(options.sort);
-  const scanLimit = Math.min(Math.max(Number(process.env.TAPDATA_SCAN_LIMIT) || 1000, 50), 5000);
+  const scanLimit = Math.min(Math.max(Number(options.scanLimit ?? process.env.TAPDATA_SCAN_LIMIT) || 1000, 1), 5000);
   const fetchLimit = needsLocalScan ? scanLimit : requestedLimit;
 
   const response = await fetchWithTimeout(tapDataCollectionUrl(config, collection), {
@@ -413,7 +419,7 @@ async function tapDataFind(collection: string, filter: Record<string, unknown>, 
       filter,
       limit: fetchLimit,
     }),
-  });
+  }, options.requestTimeoutMs ?? 12_000);
 
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 240);
@@ -451,6 +457,65 @@ async function tapDataFind(collection: string, filter: Record<string, unknown>, 
   }
 
   return records.slice(0, requestedLimit);
+}
+
+function fastTapDataOptions(limit: number) {
+  return {
+    limit,
+    // The aggregate decision collection is compact enough to scan in one
+    // bounded request. This avoids the much larger profile/session scans that
+    // previously caused explicit customer questions to exceed Vercel's limit.
+    scanLimit: Math.min(Math.max(Number(process.env.TAPDATA_AI_FAST_SCAN_LIMIT) || 1500, 50), 5000),
+    requestTimeoutMs: Math.min(Math.max(Number(process.env.TAPDATA_AI_FAST_REQUEST_TIMEOUT_MS) || 2_500, 1_000), 5_000),
+    tokenTimeoutMs: Math.min(Math.max(Number(process.env.TAPDATA_AI_FAST_TOKEN_TIMEOUT_MS) || 2_500, 1_000), 5_000),
+  };
+}
+
+async function executeFastPatronContext(patronId: string) {
+  const records = await tapDataFind("patron_realtime_decision_signals", { patronId }, {
+    projection: { _id: 0 },
+    sort: { updatedAt: -1 },
+    ...fastTapDataOptions(5),
+  });
+  const compactRecords = records.map(compactForAi);
+  return {
+    // patron_realtime_decision_signals is the TapData aggregate deliberately
+    // produced for the AI panel. It contains nested profile, session, risk,
+    // activity and offer evidence, so one bounded read is enough for a direct
+    // patron question.
+    data: { patron_realtime_decision_signals: compactRecords },
+    sources: [evidence("patron_realtime_decision_signals", compactRecords)],
+  };
+}
+
+async function executeFastTableContext(tableId: string) {
+  const [signalRecords, snapshotRecords] = await Promise.all([
+    tapDataFind("patron_realtime_decision_signals", { tableId }, {
+      projection: { _id: 0 },
+      sort: { updatedAt: -1 },
+      ...fastTapDataOptions(50),
+    }),
+    tapDataFind("table_state_snapshots", { tableId }, {
+      projection: { _id: 0 },
+      sort: { refreshedAt: -1 },
+      scanLimit: 100,
+      requestTimeoutMs: 2_500,
+      tokenTimeoutMs: 3_000,
+      limit: 5,
+    }),
+  ]);
+  const signals = signalRecords.map(compactForAi);
+  const snapshots = snapshotRecords.map(compactForAi);
+  return {
+    data: {
+      patron_realtime_decision_signals: signals,
+      table_state_snapshots: snapshots,
+    },
+    sources: [
+      evidence("patron_realtime_decision_signals", signals),
+      evidence("table_state_snapshots", snapshots),
+    ],
+  };
 }
 
 function evidence(collection: string, records: unknown[]): EvidenceSource {
@@ -729,16 +794,16 @@ Separate the response into: 数据事实, 规则结论, AI 推断, 建议下一�
     const explicitTableId = extractExplicitTableId(message);
     if (provider.provider === "deepseek" && (explicitPatronId || explicitTableId)) {
       const isPatronQuery = Boolean(explicitPatronId);
-      const includeEngagement = /营销活动|營銷活動|客户活动|客戶活動|互动|互動|优惠|優惠|推荐|推薦|触达|觸達|offer|campaign|interaction/i.test(message);
       const lookupTarget = explicitPatronId || explicitTableId!;
-      const result = await executeTool(
-        isPatronQuery ? "get_patron_context" : "get_table_context",
-        JSON.stringify(isPatronQuery
-          ? { patronId: explicitPatronId, includeEngagement }
-          : { tableId: explicitTableId }),
-      );
+      // Explicit patron/table questions use the compact TapData aggregate
+      // instead of fanning out to the large profile, session, risk and history
+      // collections. This keeps the complete request inside Vercel's short
+      // serverless execution window while preserving the evidence trail.
+      const result = isPatronQuery
+        ? await executeFastPatronContext(explicitPatronId!)
+        : await executeFastTableContext(explicitTableId!);
       sources.push(...result.sources);
-      steps.push(isPatronQuery ? "并行查询客户画像、Session 与风险证据" : "并行查询桌台状态、Session 与容量证据");
+      steps.push(isPatronQuery ? "快速读取 TapData 聚合客户信号" : "快速读取 TapData 聚合桌台信号");
 
       const response = await fetchWithTimeout(`${provider.baseUrl}/chat/completions`, {
         method: "POST",
@@ -751,7 +816,7 @@ Separate the response into: 数据事实, 规则结论, AI 推断, 建议下一�
           messages: [
             {
               role: "system",
-              content: `${systemInstructions}\nThe server has already executed a precise ${isPatronQuery ? "patron" : "table"} lookup for ${lookupTarget}. Treat only the supplied evidence as factual. Never request another tool. If a collection or field is absent, say so explicitly.`,
+              content: `${systemInstructions}\nThe server has already executed a bounded ${isPatronQuery ? "patron" : "table"} lookup from the TapData aggregate decision signal. Treat only the supplied evidence as factual. Nested profile, session, risk and offer fields may be inside patron_realtime_decision_signals. Never request another tool. If a collection or field is absent, say so explicitly.`,
             },
             {
               role: "user",
@@ -759,10 +824,10 @@ Separate the response into: 数据事实, 规则结论, AI 推断, 建议下一�
             },
           ],
           temperature: 0.2,
-          max_tokens: 1000,
+          max_tokens: 700,
           stream: false,
         }),
-      }, 8_000);
+      }, 4_500);
       if (!response.ok) {
         const detail = (await response.text()).slice(0, 300);
         throw new Error(`deepseek request failed (${response.status}): ${detail}`);
