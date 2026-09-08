@@ -18,6 +18,26 @@ type ChatReply = {
   sources?: ChatSource[];
 };
 
+async function readChatReply(response: Response): Promise<ChatReply> {
+  const raw = await response.text();
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { error: `AI request failed (HTTP ${response.status})` };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as ChatReply;
+    return parsed && typeof parsed === "object"
+      ? parsed
+      : { error: String(parsed) };
+  } catch {
+    // Vercel/Reverse-proxy failures can be plain text or HTML. Preserve the
+    // useful upstream message instead of masking it with “Unexpected token”.
+    const detail = trimmed.replace(/\s+/g, " ").slice(0, 500);
+    return { error: `AI request failed (HTTP ${response.status}): ${detail}` };
+  }
+}
+
 type Message = {
   role: "assistant" | "user";
   content: string;
@@ -779,7 +799,7 @@ export default function CommandCenter({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: question, locale, context: { experience, patronId: selectedPatronId || patronId, tableId: selectedTableId } }),
       });
-      const result = await response.json() as ChatReply;
+      const result = await readChatReply(response);
       if (!response.ok || result.error) throw new Error(result.error || "AI request failed");
       setConnectionMode(result.mode || "live");
       setMessages((current) => [...current, { role: "assistant", content: result.answer || tx(locale, "分析完成。", "分析完成。", "Analysis complete."), mode: result.mode, sources: result.sources, steps: result.steps }]);

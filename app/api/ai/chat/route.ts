@@ -25,6 +25,10 @@ type EvidenceSource = {
 
 const DEFAULT_TAPDATA_FIND_PATH_TEMPLATE = "/api/v1/{collection}/find";
 
+// Keep this route on Vercel's Node runtime. The handler uses the standard
+// server-side fetch/AbortController APIs and must return a stable JSON error
+// envelope even when an upstream provider returns a non-JSON response.
+export const runtime = "nodejs";
 export const preferredRegion = "hkg1";
 export const maxDuration = 20;
 
