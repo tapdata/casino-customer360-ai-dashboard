@@ -69,6 +69,78 @@ type LivePatron = {
   activeRiskCount: number;
 };
 
+type JourneyOverride = {
+  currentTier: string;
+  currentWager: number;
+  updatedAt: string;
+  tableId?: string;
+  seatedAt?: string | null;
+  behaviorTags?: string[];
+  currentStackEstimate?: number;
+};
+
+type JourneyOverrides = Record<string, JourneyOverride>;
+
+// The decision-workspace demo caps a single running journey at HKD 1.2M.
+// This keeps the visual story realistic while the persisted MongoDB checkpoint
+// remains the source of truth when the customer is reopened.
+const DEMO_MAX_SESSION_WAGER = 1_200_000;
+const CUSTOMER_TIER_ORDER: Record<string, number> = {
+  Unclassified: 0,
+  Bronze: 1,
+  Silver: 2,
+  Gold: 3,
+  Platinum: 4,
+  Diamond: 5,
+};
+
+function applyJourneyOverrides(patrons: LivePatron[], overrides?: JourneyOverrides) {
+  if (!overrides || !Object.keys(overrides).length) return patrons;
+  return patrons.map((patron) => {
+    const journey = overrides[patron.patronId];
+    if (!journey) return patron;
+    const sourceSession = patron.activeSession;
+    const tableId = sourceSession?.tableId || journey.tableId || "T-0001";
+    const journeyWager = Math.min(DEMO_MAX_SESSION_WAGER, Math.max(0, journey.currentWager || 0));
+    return {
+      ...patron,
+      tier: journey.currentTier,
+      adt: Math.min(DEMO_MAX_SESSION_WAGER, Math.max(patron.adt, Math.round(journeyWager * 0.55))),
+      activeSession: {
+        ...(sourceSession || {
+          tableId,
+          seatedAt: journey.seatedAt || null,
+          lastActionAt: journey.updatedAt,
+          sessionBetAmount: journeyWager,
+          currentStackEstimate: journey.currentStackEstimate || 0,
+          behaviorTags: journey.behaviorTags || [],
+          isActive: true,
+        }),
+        tableId,
+        seatedAt: sourceSession?.seatedAt || journey.seatedAt || null,
+        lastActionAt: journey.updatedAt,
+        // Preserve the larger live value when the source refresh lags behind
+        // the persisted journey checkpoint; never reset a session to a small
+        // demo baseline when returning to this view.
+        sessionBetAmount: Math.min(DEMO_MAX_SESSION_WAGER, Math.max(sourceSession?.sessionBetAmount || 0, journeyWager)),
+        currentStackEstimate: Math.max(sourceSession?.currentStackEstimate || 0, journey.currentStackEstimate || 0),
+        behaviorTags: journey.behaviorTags?.length ? journey.behaviorTags : (sourceSession?.behaviorTags || []),
+        // A demo journey represents a patron who remains at the table. Do not
+        // let a transient empty source session mark that patron offline.
+        isActive: true,
+      },
+    };
+  });
+}
+
+function compareCustomersByTier(left: LivePatron, right: LivePatron) {
+  const tierDelta = (CUSTOMER_TIER_ORDER[left.tier] ?? 0) - (CUSTOMER_TIER_ORDER[right.tier] ?? 0);
+  if (tierDelta) return tierDelta;
+  const activeDelta = Number(Boolean(right.activeSession?.isActive)) - Number(Boolean(left.activeSession?.isActive));
+  if (activeDelta) return activeDelta;
+  return left.patronId.localeCompare(right.patronId);
+}
+
 type SourceCounts = {
   patron_profiles: number;
   patron_table_sessions: number;
@@ -476,11 +548,13 @@ export default function CommandCenter({
   patronId,
   onOpenDecision,
   onLivePatronsLoaded,
+  journeyOverrides,
 }: {
   locale: Locale;
   patronId: string;
   onOpenDecision?: (patronId: string) => void;
   onLivePatronsLoaded?: (patrons: LivePatron[], sourceCounts: SourceCounts | null) => void;
+  journeyOverrides?: JourneyOverrides;
 }) {
   const [activeView, setActiveView] = useState<CommandView>("overview");
   const [experience, setExperience] = useState<Experience>("moment");
@@ -505,6 +579,8 @@ export default function CommandCenter({
   const refreshInFlightRef = useRef(false);
   const refreshSequenceRef = useRef(0);
   const livePatronsLoadedRef = useRef(onLivePatronsLoaded);
+  const journeyOverridesRef = useRef(journeyOverrides);
+  const defaultPatronChosenRef = useRef(false);
   const [prompt, setPrompt] = useState(() => defaultPrompt(locale, "moment", patronId, "T-0014"));
   const [messages, setMessages] = useState<Message[]>([{ role: "assistant", content: tx(locale, "我可以实时查询客户、Session、桌台、优惠与风险数据。请直接用业务语言提问。", "我可以即時查詢客戶、Session、桌台、優惠與風險數據。請直接用業務語言提問。", "I can query patrons, sessions, tables, offers and risk data in real time. Ask in business language.") }]);
   const [loading, setLoading] = useState(false);
@@ -524,6 +600,18 @@ export default function CommandCenter({
   useEffect(() => {
     livePatronsLoadedRef.current = onLivePatronsLoaded;
   }, [onLivePatronsLoaded]);
+
+  // Re-apply persisted decision-workspace state immediately when the parent
+  // receives a new journey checkpoint. This keeps the operations view in sync
+  // without waiting for its next polling request.
+  useEffect(() => {
+    if (!journeyOverrides || !Object.keys(journeyOverrides).length) return;
+    setPatrons((current) => applyJourneyOverrides(current, journeyOverrides));
+  }, [journeyOverrides]);
+
+  useEffect(() => {
+    journeyOverridesRef.current = journeyOverrides;
+  }, [journeyOverrides]);
 
   // Show the last known live snapshot immediately, then replace it with the
   // current TapData response once the request completes.
@@ -562,14 +650,24 @@ export default function CommandCenter({
         setDataError(result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh; keeping the last good snapshot");
         return;
       }
-      setPatrons(result.data);
-      writeLivePatronSnapshot(result.data, result.sourceCounts, result.fetchedAt);
-      livePatronsLoadedRef.current?.(result.data, result.sourceCounts || null);
+      const nextPatrons = applyJourneyOverrides(result.data, journeyOverridesRef.current);
+      setPatrons(nextPatrons);
+      writeLivePatronSnapshot(nextPatrons, result.sourceCounts, result.fetchedAt);
+      livePatronsLoadedRef.current?.(nextPatrons, result.sourceCounts || null);
       setSourceCounts(result.sourceCounts || null);
       setDataError("");
       setCacheState(result.cacheState || "miss");
       setLastUpdatedAt(result.fetchedAt ? new Date(result.fetchedAt) : new Date());
-      setSelectedPatronId((current) => result.data!.some((item) => item.patronId === current) ? current : result.data![0]?.patronId || patronId);
+      setSelectedPatronId((current) => {
+        // Customer 360 opens on the least privileged available profile so the
+        // demo can visibly show Gold/Platinum/Diamond progression. Once the
+        // operator clicks a customer, polling preserves that selection.
+        if (!defaultPatronChosenRef.current) {
+          defaultPatronChosenRef.current = true;
+          return [...nextPatrons].sort(compareCustomersByTier)[0]?.patronId || current || patronId;
+        }
+        return nextPatrons.some((item) => item.patronId === current) ? current : nextPatrons[0]?.patronId || patronId;
+      });
     } catch (error) {
       if (refreshSequenceRef.current === requestSequence) {
         const message = error instanceof Error && error.name === "AbortError"
@@ -589,6 +687,7 @@ export default function CommandCenter({
   }, [loadLivePatrons]);
 
   useEffect(() => {
+    defaultPatronChosenRef.current = false;
     setSelectedPatronId(patronId);
     setCustomerQuery("");
     setCustomerStatus("all");
@@ -694,7 +793,7 @@ export default function CommandCenter({
     return matchesQuery && matchesStatus && matchesTier && matchesRisk && matchesRegion && matchesTag;
   });
   const selectedPatronFromAll = patrons.find((item) => item.patronId === selectedPatronId);
-  const filteredPatronWindow = filteredCustomerTotal.slice(0, 40);
+  const filteredPatronWindow = [...filteredCustomerTotal].sort(compareCustomersByTier).slice(0, 40);
   const filteredPatrons = selectedPatronFromAll && !filteredPatronWindow.some((item) => item.patronId === selectedPatronFromAll.patronId)
     ? [selectedPatronFromAll, ...filteredPatronWindow.slice(0, 39)]
     : filteredPatronWindow;

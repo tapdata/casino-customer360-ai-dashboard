@@ -513,7 +513,23 @@ class OracleSink {
     await this.connection.execute(`ALTER SESSION SET CURRENT_SCHEMA = ${this.schema}`);
   }
 
+  async reconnect() {
+    try {
+      await this.connection?.close();
+    } catch {
+      // The connection may already be broken; replace it below.
+    }
+    this.connection = null;
+    this.cache.clear();
+    await this.connect();
+  }
+
+  async ensureConnected() {
+    if (!this.connection) await this.reconnect();
+  }
+
   async columns(table) {
+    await this.ensureConnected();
     const normalized = table.toUpperCase();
     if (this.cache.has(normalized)) return this.cache.get(normalized);
     const result = await this.connection.execute(
@@ -527,6 +543,7 @@ class OracleSink {
   }
 
   async upsert(table, pk, record) {
+    await this.ensureConnected();
     const normalized = table.toUpperCase();
     const available = await this.columns(normalized);
     const entries = Object.entries(record)
@@ -633,6 +650,7 @@ class OracleSink {
   }
 
   async normalizeFloor() {
+    await this.ensureConnected();
     const targetCountCase = oracleTableTargetCountCase("TABLE_ID");
     await this.connection.execute(
       `MERGE INTO GAMING_TABLE_SESSIONS t
@@ -729,6 +747,7 @@ class OracleSink {
 
   async retirePlayerRange(range) {
     if (!range) return;
+    await this.ensureConnected();
     await this.connection.execute(
       `UPDATE GAMING_TABLE_SESSIONS
        SET IS_ACTIVE = 0, LAST_ACTION_AT = CURRENT_TIMESTAMP
@@ -773,7 +792,23 @@ class MssqlSink {
     });
   }
 
+  async reconnect() {
+    try {
+      await this.pool?.close();
+    } catch {
+      // The pool may already be broken; replace it below.
+    }
+    this.pool = null;
+    this.cache.clear();
+    await this.connect();
+  }
+
+  async ensureConnected() {
+    if (!this.pool || this.pool.connected === false) await this.reconnect();
+  }
+
   async columns(table) {
+    await this.ensureConnected();
     if (this.cache.has(table)) return this.cache.get(table);
     const request = this.pool.request();
     request.input("schema", this.schema);
@@ -785,6 +820,7 @@ class MssqlSink {
   }
 
   async upsert(table, pk, record) {
+    await this.ensureConnected();
     const available = await this.columns(table);
     const entries = Object.entries(record).filter(([key, value]) => available.has(key) && value !== undefined);
     if (!entries.some(([key]) => key === pk)) throw new Error(`MSSQL ${table}: missing primary key ${pk}`);
@@ -869,6 +905,7 @@ class MssqlSink {
   }
 
   async closeActiveRiskForPlayer(playerId) {
+    await this.ensureConnected();
     const closeCase = this.pool.request();
     closeCase.input("playerId", String(playerId));
     await closeCase.query(
@@ -893,6 +930,7 @@ class MssqlSink {
 
   async retirePlayerRange(range) {
     if (!range) return;
+    await this.ensureConnected();
     const closeCases = this.pool.request();
     closeCases.input("startPlayerId", String(range.start));
     closeCases.input("endPlayerId", String(range.end));
@@ -943,16 +981,40 @@ async function connectSinks() {
   if (missing.length > 0) {
     console.warn(`Partial source mode: missing ${missing.join(", ")}.`);
   }
-  for (const sink of sinks) {
-    try {
+  let connectingSink = null;
+  try {
+    for (const sink of sinks) {
+      connectingSink = sink;
       console.log(`Connecting ${sink.sourceName}...`);
       await sink.connect();
       console.log(`Connected ${sink.sourceName}.`);
-    } catch (error) {
-      throw new Error(`${sink.sourceName} connect failed: ${error.message}`);
     }
+  } catch (error) {
+    for (const sink of sinks.reverse()) {
+      try {
+        await sink.close();
+      } catch {
+        // Best effort cleanup before the next connection attempt.
+      }
+    }
+    throw new Error(`${connectingSink?.sourceName || "Source"} connect failed: ${error.message}`);
   }
   return sinks;
+}
+
+async function connectSinksWithRetry(stopAt) {
+  let attempt = 0;
+  while (!stopped && (!stopAt || Date.now() < stopAt)) {
+    attempt += 1;
+    try {
+      return await connectSinks();
+    } catch (error) {
+      const waitMs = Math.min(30000, 5000 * Math.min(attempt, 6));
+      console.warn(`Source connection attempt ${attempt} failed: ${error.message}; retrying in ${Math.round(waitMs / 1000)}s.`);
+      await new Promise((resolveSleep) => setTimeout(resolveSleep, waitMs));
+    }
+  }
+  throw new Error("Source feeder stopped before the source databases became available.");
 }
 
 async function maintainRiskRatio(sinks) {
@@ -960,6 +1022,9 @@ async function maintainRiskRatio(sinks) {
   const mssqlSink = sinks.find((sink) => sink instanceof MssqlSink);
   const pgSink = sinks.find((sink) => sink instanceof PgSink);
   if (!oracleSink || !mssqlSink) return;
+
+  await oracleSink.ensureConnected();
+  await mssqlSink.ensureConnected();
 
   const activeResult = await oracleSink.connection.execute(
     `SELECT PLAYER_ID
@@ -1049,6 +1114,33 @@ async function maintainRiskRatio(sinks) {
   console.log(`Risk guardrail normalized active risks: target=${targetRiskCount} (${(riskRatio * 100).toFixed(1)}%), closed=${closePlayers.length}.`);
 }
 
+async function writeSinkWithRetry(sink, person) {
+  // A source connection can be dropped by an idle timeout or short network
+  // flap. Retry without terminating the 72-hour feeder; the next cycle
+  // upserts the same deterministic keys and repairs any partial write.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await sink.write(person);
+      console.log(`Wrote ${sink.sourceName}.`);
+      return true;
+    } catch (error) {
+      if (typeof sink.reconnect !== "function") {
+        console.warn(`${sink.sourceName} write deferred: ${error.message}`);
+        return false;
+      }
+      try {
+        console.warn(`${sink.sourceName} transient write issue (attempt ${attempt}/3); reconnecting.`);
+        await sink.reconnect();
+      } catch (reconnectError) {
+        console.warn(`${sink.sourceName} reconnect deferred: ${reconnectError.message}`);
+      }
+      if (attempt < 3) await new Promise((resolveSleep) => setTimeout(resolveSleep, Math.min(3000, attempt * 1000)));
+    }
+  }
+  console.warn(`${sink.sourceName} write deferred after 3 attempts; continuing next cycle.`);
+  return false;
+}
+
 const seenPlayers = new Set();
 // Keep the demo realistic while still making changes visible: each cycle
 // toggles a small random set of existing customers instead of continuously
@@ -1098,7 +1190,7 @@ async function main() {
       `tableCap=${maxVisiblePerTable}, riskRatio=${(riskRatio * 100).toFixed(1)}%, durationHours=${durationHours || "unbounded"}, ` +
       `dryRun=${dryRun}, maxEvents=${maxEvents || "unbounded"}`,
   );
-  const sinks = dryRun ? [] : await connectSinks();
+  const sinks = dryRun ? [] : await connectSinksWithRetry(stopAt);
   const rangeToRetire = parseNumberRange(retirePlayerRange);
   if (rangeToRetire) {
     console.log(`Retiring previous demo activity for player range ${rangeToRetire.start}-${rangeToRetire.end}...`);
@@ -1123,19 +1215,7 @@ async function main() {
         printPlan(person);
         if (!dryRun) {
           for (const sink of sinks) {
-            try {
-              await sink.write(person);
-              console.log(`Wrote ${sink.sourceName}.`);
-            } catch (error) {
-              if (typeof sink.reconnect === "function") {
-                console.warn(`${sink.sourceName} write failed once, reconnecting and retrying: ${error.message}`);
-                await sink.reconnect();
-                await sink.write(person);
-                console.log(`Wrote ${sink.sourceName} after reconnect.`);
-              } else {
-                throw new Error(`${sink.sourceName} write failed: ${error.message}`);
-              }
-            }
+            await writeSinkWithRetry(sink, person);
           }
           for (const sink of sinks) {
             if (sink.connection?.commit) await sink.connection.commit();
@@ -1154,7 +1234,21 @@ async function main() {
       // With a three-customer cap this guarantees that risk normalization
       // cannot become a hidden batch operation.
       if (!dryRun) {
-        await maintainRiskRatio(sinks);
+        try {
+          await maintainRiskRatio(sinks);
+        } catch (error) {
+          // Keep the long-running feeder alive across a transient source outage.
+          // Each sink reconnects lazily on the next write or reconciliation.
+          console.warn(`Risk guardrail deferred after transient source issue: ${error.message}`);
+          for (const sink of sinks) {
+            if (typeof sink.reconnect !== "function") continue;
+            try {
+              await sink.reconnect();
+            } catch (reconnectError) {
+              console.warn(`${sink.sourceName} reconnect deferred: ${reconnectError.message}`);
+            }
+          }
+        }
       }
       if (stopAt > 0 && Date.now() >= stopAt) {
         console.log(`Reached durationHours=${durationHours}. Stopping source feeder.`);

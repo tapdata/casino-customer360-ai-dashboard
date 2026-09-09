@@ -104,7 +104,20 @@ MONGO_AUDIT_AUTH_DB=admin
 MONGO_AUDIT_AUTH_MECHANISM=SCRAM-SHA-256
 MONGO_AUDIT_DB=ai_loyalty_engine
 MONGO_AUDIT_COLLECTION=ai_action_events
+MONGO_DEMO_JOURNEY_COLLECTION=demo_upgrade_journeys
 ```
+
+When an operator opens a customer decision workspace, the panel starts a
+one-minute journey and stores each three-second wager/tier checkpoint in
+`ai_loyalty_engine.demo_upgrade_journeys`. This is separate from TapData source
+collections, so the demo does not write back into CDC-managed records.
+
+The journey policy uses `patron_table_sessions.sessionBetAmount` as cumulative
+wager for the current session: Gold at HKD 300,000, Platinum at HKD 700,000,
+and Diamond at HKD 1,200,000. `patron_profiles.adt` is the
+separate average-daily-theoretical value signal, not lifetime wagering. A
+completed journey is restored on re-entry; only an explicit
+`restart: true` POST starts it over.
 
 Important:
 

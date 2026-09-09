@@ -158,8 +158,45 @@ MONGO_AUDIT_AUTH_DB=<auth-db>
 MONGO_AUDIT_AUTH_MECHANISM=SCRAM-SHA-256
 MONGO_AUDIT_DB=ai_loyalty_engine
 MONGO_AUDIT_COLLECTION=ai_action_events
+MONGO_DEMO_JOURNEY_COLLECTION=demo_upgrade_journeys
 LOCAL_AUDIT_RELAY_PORT=8790
 ```
+
+The decision workspace also persists its one-minute VIP upgrade demonstration
+to `ai_loyalty_engine.demo_upgrade_journeys` (one checkpoint every three
+seconds). The journey collection is intentionally separate from TapData CDC
+source collections; it provides real MongoDB persistence without overwriting
+the source-of-truth customer records.
+
+### VIP upgrade metric and thresholds
+
+The demo uses `patron_table_sessions.sessionBetAmount` as the current-session
+cumulative wager (the sum of wagers since the current table session began).
+It is not a lifetime total. `patron_profiles.adt` remains the customer value
+signal (average daily theoretical value) and is not substituted for historical
+cumulative wagering. A production lifetime metric should be a separately
+aggregated field such as `lifetimeWager` or `rolling30dWager`.
+
+For the one-minute demonstration, the visible policy is deliberately simple:
+
+| Starting tier | Current-session cumulative wager | Result | Next-best-action |
+| --- | --- | --- | --- |
+| Bronze / Silver | `< HKD 300,000` | Keep current tier | Observe and provide light-touch service |
+| Bronze / Silver | `>= HKD 300,000` | Gold | Suite upgrade + late checkout |
+| Gold / Platinum | `< HKD 700,000` | Keep current tier | Use the tier's existing benefit set |
+| Gold / Platinum | `>= HKD 700,000` | Platinum (or keep Platinum) | Add the next approved benefit set |
+| Any tier | `>= HKD 1,200,000` | Diamond | Add chauffeur transfer + dining voucher |
+
+`sessionBetAmount` is the cumulative wager inside the current table session;
+it is not the number of sessions and is not lifetime wagering. The demo uses
+it only to make a one-minute story visible. For a real tier decision, combine
+rolling 7/30-day turnover, `patron_profiles.adt`, visit frequency and risk
+controls. A single large session should create a Diamond eligibility/review
+signal, not permanently promote a customer without governed approval.
+
+When an operator leaves and re-enters the same customer, the latest running or
+completed journey is restored from MongoDB. It is only reset when a caller
+explicitly sends `restart: true` to `POST /api/demo/upgrade`.
 
 You can also configure only `MONGO_AUDIT_URI` if that is preferred.
 

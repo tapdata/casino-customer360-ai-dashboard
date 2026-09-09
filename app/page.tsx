@@ -105,6 +105,28 @@ type LiveSourceCounts = {
   chat_messages: number;
 };
 
+type UpgradeJourney = {
+  journeyId: string;
+  patronId: string;
+  status: "running" | "completed";
+  stage: number;
+  elapsedSeconds: number;
+  secondsRemaining: number;
+  startedAt: string;
+  endsAt: string;
+  updatedAt: string;
+  currentTier: string;
+  currentWager: number;
+  recommendation: string;
+  thresholds: { gold?: number; platinum?: number; diamond: number };
+  collection: string;
+  database: string;
+  tableId?: string;
+  seatedAt?: string | null;
+  behaviorTags?: string[];
+  currentStackEstimate?: number;
+};
+
 type FilterState = {
   status: "all" | "watch" | "safe" | "warm";
   tier: "all" | "diamond" | "platinum" | "gold" | "silver" | "bronze";
@@ -113,6 +135,11 @@ type FilterState = {
 };
 
 const defaultFilters: FilterState = { status: "all", tier: "all", game: "all", tag: "all" };
+
+// Keep the one-minute upgrade story bounded to a casino-realistic maximum.
+// Source snapshots remain untouched; only the persisted demo journey overlay
+// is capped so a stale upstream value cannot jump past the final stage.
+const DEMO_MAX_SESSION_WAGER = 1_200_000;
 
 type DeliveryChannel = "whatsapp" | "sms" | "push";
 type AlertWorkflowStatus = "open" | "sending" | "sent" | "closing" | "closed";
@@ -1100,10 +1127,15 @@ function livePatronScenario(patron: LivePatron, locale: Locale, converter: (text
   const isVip = ["Diamond", "Platinum", "Gold"].includes(patron.tier);
   const isHighValue = isVip || patron.adt >= 10000 || (session?.sessionBetAmount || 0) >= 18000;
   const likesPromo = tags.includes("PromoSeeker") || patron.pointsBalance >= 50000;
+  const upgradeBenefitTitle = patron.tier === "Diamond"
+    ? local("套房升级 + 延迟退房 + 豪车接送 + 餐饮体验券", "套房升級 + 延遲退房 + 豪車接送 + 餐飲體驗券", "Suite upgrade + late checkout + chauffeur + dining voucher")
+    : patron.tier === "Platinum"
+      ? local("套房升级 + 延迟退房 + 豪车接送", "套房升級 + 延遲退房 + 豪車接送", "Suite upgrade + late checkout + chauffeur")
+      : local("套房升级 + 延迟退房", "套房升級 + 延遲退房", "Suite upgrade + late checkout");
   const recommendedTitle = hasRisk
     ? local("暂停刺激型优惠，改为客户经理关怀", "暫停刺激型優惠，改為客戶經理關懷", "Pause incentives; switch to host care")
-    : isHighValue && (patron.tier === "Diamond" || patron.tier === "Platinum")
-      ? local("套房升级 + 延迟退房", "套房升級 + 延遲退房", "Suite upgrade + late checkout")
+    : isHighValue && isVip
+      ? upgradeBenefitTitle
       : likesPromo
         ? local("积分闪兑礼遇 + 餐饮券", "積分閃兌禮遇 + 餐飲券", "Points redemption boost + dining voucher")
         : session
@@ -1260,17 +1292,63 @@ export default function Home() {
   const [pulseOpen, setPulseOpen] = useState(false);
   const [pulseMetric, setPulseMetric] = useState<PulseMetric>("profiles");
   const [alternativeOverrides, setAlternativeOverrides] = useState<Record<string, Record<number, "eligible" | "blocked">>>({});
+  const [upgradeJourney, setUpgradeJourney] = useState<UpgradeJourney | null>(null);
+  // Keep a checkpoint for every patron opened in the decision workspace so
+  // the operations view can render the same persisted upgrade/session state.
+  const [upgradeJourneys, setUpgradeJourneys] = useState<Record<string, UpgradeJourney>>({});
+  // The journey is persisted and advanced in the background. Its internal
+  // loading/error state is intentionally not exposed in the customer UI.
+  const [, setUpgradeLoading] = useState(false);
+  const [, setUpgradeError] = useState("");
   const filterControlRef = useRef<HTMLDivElement>(null);
   const notificationControlRef = useRef<HTMLDivElement>(null);
   const pendingDecisionSelectionRef = useRef<string | null>(null);
-  const localizedScenarios = useMemo(() => livePatrons?.length
-    ? livePatrons.map((patron) => livePatronScenario(patron, locale, traditionalConverter))
+  const livePatronsRef = useRef<LivePatron[] | null>(null);
+  const livePatronCount = livePatrons?.length ?? 0;
+  const effectiveLivePatrons = useMemo(() => {
+    if (!livePatrons?.length) return livePatrons;
+    const journeys = { ...upgradeJourneys };
+    if (upgradeJourney) journeys[upgradeJourney.patronId] = upgradeJourney;
+    return livePatrons.map((patron) => {
+      const journey = journeys[patron.patronId];
+      if (!journey) return patron;
+      const sourceSession = patron.activeSession;
+      const tableId = sourceSession?.tableId || journey.tableId || "T-0001";
+      return {
+        ...patron,
+        tier: journey.currentTier,
+        adt: Math.min(DEMO_MAX_SESSION_WAGER, Math.max(patron.adt, Math.round(Math.min(DEMO_MAX_SESSION_WAGER, journey.currentWager) * 0.55))),
+        activeSession: {
+          ...(sourceSession || {
+            tableId,
+            seatedAt: journey.seatedAt || journey.startedAt,
+            lastActionAt: journey.updatedAt,
+            sessionBetAmount: Math.min(DEMO_MAX_SESSION_WAGER, journey.currentWager),
+            currentStackEstimate: journey.currentStackEstimate || 0,
+            behaviorTags: journey.behaviorTags || [],
+            isActive: true,
+          }),
+          tableId,
+          seatedAt: sourceSession?.seatedAt || journey.seatedAt || journey.startedAt,
+          // The journey may be ahead of the last API snapshot, but it must
+          // never make a live session appear to lose its wager or stack.
+          sessionBetAmount: Math.min(DEMO_MAX_SESSION_WAGER, Math.max(sourceSession?.sessionBetAmount || 0, journey.currentWager)),
+          currentStackEstimate: Math.max(sourceSession?.currentStackEstimate || 0, journey.currentStackEstimate || 0),
+          behaviorTags: journey.behaviorTags?.length ? journey.behaviorTags : (sourceSession?.behaviorTags || []),
+          isActive: true,
+          lastActionAt: journey.updatedAt,
+        },
+      };
+    });
+  }, [livePatrons, upgradeJourney, upgradeJourneys]);
+  const localizedScenarios = useMemo(() => effectiveLivePatrons?.length
+    ? effectiveLivePatrons.map((patron) => livePatronScenario(patron, locale, traditionalConverter))
     : scenarios.map((item) => translateScenario(item, locale, traditionalConverter)),
-  [livePatrons, locale, traditionalConverter]);
-  const snapshotMap = useMemo(() => livePatrons?.length
-    ? Object.fromEntries(livePatrons.map((patron) => [patron.patronId, livePatronSnapshot(patron)]))
+  [effectiveLivePatrons, locale, traditionalConverter]);
+  const snapshotMap = useMemo(() => effectiveLivePatrons?.length
+    ? Object.fromEntries(effectiveLivePatrons.map((patron) => [patron.patronId, livePatronSnapshot(patron)]))
     : mongoSnapshots,
-  [livePatrons]);
+  [effectiveLivePatrons]);
   const t = useMemo(
     () => locale === "en" ? enText : locale === "zh-Hant" ? deepConvert(zhText, traditionalConverter) : zhText,
     [locale, traditionalConverter],
@@ -1484,6 +1562,73 @@ export default function Home() {
   }, [primaryView]);
 
   useEffect(() => {
+    livePatronsRef.current = livePatrons;
+  }, [livePatrons]);
+
+  // The upgrade journey is deliberately started only after the operator opens
+  // a customer decision workspace. Each three-second poll advances and
+  // persists the journey in MongoDB, so the wager/tier progression is not a
+  // browser-only animation and can be inspected after the demo.
+  useEffect(() => {
+    if (primaryView !== "customers" || !selectedId || livePatronCount === 0) {
+      return undefined;
+    }
+    const selected = livePatronsRef.current?.find((patron) => patron.patronId === selectedId);
+    if (!selected) return undefined;
+    // Capture the narrowed value for the interval callback. TypeScript cannot
+    // carry the outer `if (!selected)` narrowing into the nested async function.
+    const selectedPatron = selected;
+    let cancelled = false;
+    let firstRequest = true;
+    let requestInFlight = false;
+
+    async function requestJourney() {
+      if (cancelled || requestInFlight) return;
+      requestInFlight = true;
+      const isFirstRequest = firstRequest;
+      try {
+        if (isFirstRequest) setUpgradeLoading(true);
+        const response = await fetch(isFirstRequest ? "/api/demo/upgrade" : `/api/demo/upgrade?patronId=${encodeURIComponent(selectedId)}`, {
+          method: isFirstRequest ? "POST" : "GET",
+          headers: { accept: "application/json", ...(isFirstRequest ? { "content-type": "application/json" } : {}) },
+          body: isFirstRequest ? JSON.stringify({
+            patronId: selectedId,
+            startTier: selectedPatron.tier,
+            tableId: selectedPatron.activeSession?.tableId || "T-0001",
+            seatedAt: selectedPatron.activeSession?.seatedAt || new Date().toISOString(),
+            behaviorTags: selectedPatron.activeSession?.behaviorTags || [],
+            currentStackEstimate: selectedPatron.activeSession?.currentStackEstimate || 0,
+            sessionBetAmount: selectedPatron.activeSession?.sessionBetAmount || 0,
+          }) : undefined,
+          cache: "no-store",
+        });
+        const payload = await response.json() as { ok?: boolean; journey?: UpgradeJourney | null; error?: string };
+        if (!response.ok || payload.ok === false || !payload.journey) throw new Error(payload.error || "Unable to start the upgrade journey");
+        if (!cancelled) {
+          setUpgradeJourney(payload.journey);
+          setUpgradeJourneys((current) => payload.journey
+            ? { ...current, [payload.journey.patronId]: payload.journey }
+            : current);
+          setUpgradeError("");
+          firstRequest = false;
+        }
+      } catch (error) {
+        if (!cancelled) setUpgradeError(error instanceof Error ? error.message : "Unable to persist the upgrade journey");
+      } finally {
+        if (isFirstRequest) setUpgradeLoading(false);
+        requestInFlight = false;
+      }
+    }
+
+    void requestJourney();
+    const timer = window.setInterval(() => void requestJourney(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [livePatronCount, primaryView, selectedId]);
+
+  useEffect(() => {
     if (!pulseOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setPulseOpen(false);
@@ -1532,6 +1677,8 @@ export default function Home() {
   }
 
   function changeScenario(id: string) {
+    setUpgradeJourney(null);
+    setUpgradeError("");
     setSelectedId(id);
     setShowAnswer(false);
     setCopiedMessage(false);
@@ -1813,7 +1960,7 @@ export default function Home() {
       {primaryView === "customers" ? <>
 
       <div className="decision-backbar">
-        <button type="button" onClick={() => setPrimaryView("operations")}>← {locale === "en" ? "Back to system menu" : locale === "zh-Hant" ? "返回系統選單" : "返回系统菜单"}</button>
+        <button type="button" onClick={() => { setUpgradeError(""); setPrimaryView("operations"); }}>← {locale === "en" ? "Back to system menu" : locale === "zh-Hant" ? "返回系統選單" : "返回系统菜单"}</button>
         <span>{locale === "en" ? "Customer decision workspace" : locale === "zh-Hant" ? "客戶決策工作台" : "客户决策工作台"} · {snapshot.patronId}</span>
       </div>
 
@@ -2305,13 +2452,23 @@ export default function Home() {
         }}
         onOpenDecision={(patronId) => {
         pendingDecisionSelectionRef.current = patronId;
+        // Keep the selected customer in view for the full one-minute demo;
+        // the journey itself advances every three seconds in MongoDB.
+        setAutoTour(false);
+        // Do not discard a persisted journey when the operator leaves and
+        // re-enters the same customer. Clear only when switching customers;
+        // the API will also restore the latest MongoDB checkpoint on entry.
+        setUpgradeJourney((current) => current?.patronId === patronId ? current : (upgradeJourneys[patronId] || null));
+        setUpgradeError("");
         setFilters(defaultFilters);
         setSearchQuery("");
         setSearchOpen(false);
         setSelectedId(patronId);
         setLiveRefreshTick((tick) => tick + 1);
         setPrimaryView("customers");
-      }} />}
+      }}
+        journeyOverrides={upgradeJourneys}
+      />}
       {toast && <div className="delivery-toast" role="status"><span>✓</span>{toast}<small>{t.deliveredTo} · {lastRecipient}</small></div>}
     </main>
   );
