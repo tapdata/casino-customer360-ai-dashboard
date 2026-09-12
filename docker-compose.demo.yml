@@ -1,0 +1,100 @@
+name: tapdata-ai-loyalty-demo
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    command: ["mongod", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-demo_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env.demo}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - demo_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:16
+    profiles: [sources]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SOURCE_PG_USER:-casino_demo}
+      POSTGRES_PASSWORD: ${SOURCE_PG_PASSWORD:-change-me}
+      POSTGRES_DB: ${SOURCE_PG_DATABASE:-casino_loyalty}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+      - ./seed/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  tapdata:
+    image: ${TAPDATA_IMAGE:?Set TAPDATA_IMAGE in .env.demo}
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      # The exact metadata variable can differ by TapData edition. Keep it
+      # explicit so it is easy to adapt to the chosen image documentation.
+      MONGO_URI: ${TAPDATA_MONGO_URI}
+    ports:
+      - "${TAPDATA_UI_PORT:-3030}:3030"
+      - "${TAPDATA_API_PORT:-3080}:3080"
+    volumes:
+      - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
+      - ./secrets:/opt/tapdata-demo/secrets:ro
+
+  ai-panel:
+    build:
+      context: .
+      dockerfile: docker/ai-panel.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      tapdata:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      AI_PROVIDER: ${AI_PROVIDER:-deepseek}
+      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_FIND_PATH_TEMPLATE: ${TAPDATA_FIND_PATH_TEMPLATE:-/api/v1/{collection}/find}
+      TAPDATA_TOKEN_URL: ${TAPDATA_TOKEN_URL:-http://tapdata:3030/oauth/token}
+      TAPDATA_CLIENT_ID: ${TAPDATA_CLIENT_ID:-}
+      TAPDATA_CLIENT_SECRET: ${TAPDATA_CLIENT_SECRET:-}
+      TAPDATA_TOKEN_AUTH_METHOD: ${TAPDATA_TOKEN_AUTH_METHOD:-client_secret_post}
+      TAPDATA_ACCESS_TOKEN: ${TAPDATA_ACCESS_TOKEN:-}
+      TAPDATA_COLLECTION_MAP: ${TAPDATA_COLLECTION_MAP:-}
+      TAPDATA_PAGE_SIZE: ${TAPDATA_PAGE_SIZE:-200}
+      TAPDATA_REQUEST_TIMEOUT_MS: ${TAPDATA_REQUEST_TIMEOUT_MS:-8000}
+      TAPDATA_BODY_TIMEOUT_MS: ${TAPDATA_BODY_TIMEOUT_MS:-8000}
+      TAPDATA_SCAN_LIMIT: ${TAPDATA_SCAN_LIMIT:-1000}
+      MONGO_AUDIT_URI: ${MONGO_AUDIT_URI}
+      MONGO_AUDIT_DB: ${MONGO_AUDIT_DB:-ai_loyalty_engine}
+      MONGO_AUDIT_COLLECTION: ${MONGO_AUDIT_COLLECTION:-ai_action_events}
+      MONGO_SNAPSHOT_URI: ${MONGO_SNAPSHOT_URI}
+      MONGO_SNAPSHOT_DB: ${MONGO_SNAPSHOT_DB:-ai_loyalty_engine}
+      MONGO_SNAPSHOT_COLLECTION: ${MONGO_SNAPSHOT_COLLECTION:-live_patrons_snapshot}
+      MONGO_DEMO_JOURNEY_COLLECTION: ${MONGO_DEMO_JOURNEY_COLLECTION:-demo_upgrade_journeys}
+    ports:
+      - "${AI_PANEL_PORT:-3000}:3000"
+
+volumes:
+  demo_mongo_data:
+  demo_postgres_data:
+
