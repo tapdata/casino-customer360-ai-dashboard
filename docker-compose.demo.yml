@@ -54,6 +54,34 @@ services:
       - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
       - ./secrets:/opt/tapdata-demo/secrets:ro
 
+  # Records the selected image/API/export metadata after Mongo is ready. It
+  # deliberately stores only presence flags for credentials, never secrets.
+  bootstrap:
+    build:
+      context: .
+      dockerfile: docker/bootstrap.Dockerfile
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_BOOTSTRAP_URI: ${MONGO_BOOTSTRAP_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-ai_loyalty_engine}?authSource=admin}
+      MONGO_BOOTSTRAP_DB: ${MONGO_BOOTSTRAP_DB:-ai_loyalty_engine}
+      MONGO_BOOTSTRAP_COLLECTION: ${MONGO_BOOTSTRAP_COLLECTION:-tapdata_runtime_config}
+      TAPDATA_IMAGE: ${TAPDATA_IMAGE}
+      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_TOKEN_URL: ${TAPDATA_TOKEN_URL:-http://tapdata:3030/oauth/token}
+      TAPDATA_FIND_PATH_TEMPLATE: ${TAPDATA_FIND_PATH_TEMPLATE:-/api/v1/{collection}/find}
+      TAPDATA_TOKEN_AUTH_METHOD: ${TAPDATA_TOKEN_AUTH_METHOD:-client_secret_post}
+      TAPDATA_COLLECTION_MAP: ${TAPDATA_COLLECTION_MAP:-}
+      TAPDATA_EXPORT_ROOT: /opt/tapdata-demo/exports
+      TAPDATA_CLIENT_ID: ${TAPDATA_CLIENT_ID:-}
+      TAPDATA_CLIENT_SECRET: ${TAPDATA_CLIENT_SECRET:-}
+      TAPDATA_ACCESS_TOKEN: ${TAPDATA_ACCESS_TOKEN:-}
+      TAPDATA_STORE_CREDENTIALS: ${TAPDATA_STORE_CREDENTIALS:-false}
+    volumes:
+      - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
+
   ai-panel:
     build:
       context: .
@@ -64,6 +92,8 @@ services:
         condition: service_healthy
       tapdata:
         condition: service_started
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -84,10 +114,10 @@ services:
       TAPDATA_REQUEST_TIMEOUT_MS: ${TAPDATA_REQUEST_TIMEOUT_MS:-8000}
       TAPDATA_BODY_TIMEOUT_MS: ${TAPDATA_BODY_TIMEOUT_MS:-8000}
       TAPDATA_SCAN_LIMIT: ${TAPDATA_SCAN_LIMIT:-1000}
-      MONGO_AUDIT_URI: ${MONGO_AUDIT_URI}
+      MONGO_AUDIT_URI: ${MONGO_AUDIT_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-ai_loyalty_engine}?authSource=admin}
       MONGO_AUDIT_DB: ${MONGO_AUDIT_DB:-ai_loyalty_engine}
       MONGO_AUDIT_COLLECTION: ${MONGO_AUDIT_COLLECTION:-ai_action_events}
-      MONGO_SNAPSHOT_URI: ${MONGO_SNAPSHOT_URI}
+      MONGO_SNAPSHOT_URI: ${MONGO_SNAPSHOT_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-ai_loyalty_engine}?authSource=admin}
       MONGO_SNAPSHOT_DB: ${MONGO_SNAPSHOT_DB:-ai_loyalty_engine}
       MONGO_SNAPSHOT_COLLECTION: ${MONGO_SNAPSHOT_COLLECTION:-live_patrons_snapshot}
       MONGO_DEMO_JOURNEY_COLLECTION: ${MONGO_DEMO_JOURNEY_COLLECTION:-demo_upgrade_journeys}
@@ -97,4 +127,3 @@ services:
 volumes:
   demo_mongo_data:
   demo_postgres_data:
-

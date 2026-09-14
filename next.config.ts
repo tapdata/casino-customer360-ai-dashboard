@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Keep the production container small: the runtime image only needs the
+  // standalone server and its static assets.
+  output: "standalone",
 };
 
 export default nextConfig;
