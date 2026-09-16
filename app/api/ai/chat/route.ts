@@ -7,6 +7,7 @@ import {
   demoTableStates,
 } from "./demo-data";
 import { tapDataCollectionLabel, tapDataCollectionUrl as buildTapDataCollectionUrl } from "../../tapdata-collections";
+import { getTapDataConfig, type TapDataConfig } from "../../../lib/tapdata-config";
 
 type ChatRequest = {
   message?: string;
@@ -22,8 +23,6 @@ type EvidenceSource = {
   collection: string;
   count: number;
 };
-
-const DEFAULT_TAPDATA_FIND_PATH_TEMPLATE = "/api/v1/{collection}/find";
 
 // Keep this route on Vercel's Node runtime. The handler uses the standard
 // server-side fetch/AbortController APIs and must return a stable JSON error
@@ -305,36 +304,8 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 12_0
   }
 }
 
-type TapDataConfig = {
-  baseUrl: string;
-  accessToken?: string;
-  tokenUrl?: string;
-  clientId?: string;
-  clientSecret?: string;
-  tokenAuthMethod: "client_secret_post" | "client_secret_basic";
-  findPathTemplate: string;
-};
-
 let cachedTapDataToken: { value: string; expiresAt: number } | null = null;
 let tapDataTokenPromise: Promise<string> | null = null;
-
-function tapDataConfig(): TapDataConfig | null {
-  const baseUrl = process.env.TAPDATA_API_BASE_URL?.replace(/\/$/, "");
-  const accessToken = process.env.TAPDATA_ACCESS_TOKEN;
-  const tokenUrl = process.env.TAPDATA_TOKEN_URL;
-  const clientId = process.env.TAPDATA_CLIENT_ID;
-  const clientSecret = process.env.TAPDATA_CLIENT_SECRET;
-  if (!baseUrl || (!accessToken && !(tokenUrl && clientId && clientSecret))) return null;
-  return {
-    baseUrl,
-    accessToken,
-    tokenUrl,
-    clientId,
-    clientSecret,
-    tokenAuthMethod: process.env.TAPDATA_TOKEN_AUTH_METHOD === "client_secret_basic" ? "client_secret_basic" : "client_secret_post",
-    findPathTemplate: process.env.TAPDATA_FIND_PATH_TEMPLATE || DEFAULT_TAPDATA_FIND_PATH_TEMPLATE,
-  };
-}
 
 function tokenFromPayload(payload: unknown) {
   if (!payload || typeof payload !== "object") return null;
@@ -396,7 +367,7 @@ async function tapDataFind(collection: string, filter: Record<string, unknown>, 
   tokenTimeoutMs?: number;
 } = {}) {
   if (!allowedCollections.has(collection)) throw new Error("Collection is not allowed");
-  const config = tapDataConfig();
+  const config = await getTapDataConfig();
   if (!config) throw new Error("TapData is not configured");
   const token = await tapDataAccessToken(config, options.tokenTimeoutMs ?? 12_000);
   const requestedLimit = clampLimit(options.limit);
@@ -753,7 +724,7 @@ export async function POST(request: Request) {
     if (message.length > 2_000) return Response.json({ error: "message is too long" }, { status: 400 });
 
     const provider = aiConfig();
-    const tapData = tapDataConfig();
+    const tapData = await getTapDataConfig();
     if (!provider || !tapData) {
       const simulated = simulateQuery(message, body.context, body.locale);
       return Response.json({

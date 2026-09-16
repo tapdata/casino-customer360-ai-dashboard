@@ -4,7 +4,15 @@ services:
   mongo:
     image: mongo:7
     restart: unless-stopped
-    command: ["mongod", "--bind_ip_all"]
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        if [ ! -s /data/db/replica.key ]; then
+          openssl rand -base64 756 > /data/db/replica.key
+        fi
+        chown mongodb:mongodb /data/db/replica.key
+        chmod 400 /data/db/replica.key
+        exec /usr/local/bin/docker-entrypoint.sh mongod --bind_ip_all --replSet rs1 --keyFile /data/db/replica.key
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-demo_admin}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env.demo}
@@ -12,41 +20,17 @@ services:
       - "${MONGO_PORT:-27017}:27017"
     volumes:
       - demo_mongo_data:/data/db
+      - ./docker/mongo-replica-health.js:/opt/demo/replica-health.js:ro
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  postgres:
-    image: postgres:16
-    profiles: [sources]
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${SOURCE_PG_USER:-casino_demo}
-      POSTGRES_PASSWORD: ${SOURCE_PG_PASSWORD:-change-me}
-      POSTGRES_DB: ${SOURCE_PG_DATABASE:-casino_loyalty}
-    ports:
-      - "${POSTGRES_PORT:-5433}:5432"
-    volumes:
-      - demo_postgres_data:/var/lib/postgresql/data
-      - ./seed/postgres:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD", "mongosh", "--quiet", "--host", "127.0.0.1", "/opt/demo/replica-health.js"]
       interval: 5s
       timeout: 5s
       retries: 20
 
   tapdata:
-    image: ${TAPDATA_IMAGE:?Set TAPDATA_IMAGE in .env.demo}
+    image: ${TAPDATA_IMAGE:-ghcr.io/tapdata/tapdata:latest}
+    privileged: true
     restart: unless-stopped
-    depends_on:
-      mongo:
-        condition: service_healthy
-    environment:
-      # The exact metadata variable can differ by TapData edition. Keep it
-      # explicit so it is easy to adapt to the chosen image documentation.
-      MONGO_URI: ${TAPDATA_MONGO_URI}
     ports:
       - "${TAPDATA_UI_PORT:-3030}:3030"
       - "${TAPDATA_API_PORT:-3080}:3080"
@@ -65,8 +49,8 @@ services:
       mongo:
         condition: service_healthy
     environment:
-      MONGO_BOOTSTRAP_URI: ${MONGO_BOOTSTRAP_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-ai_loyalty_engine}?authSource=admin}
-      MONGO_BOOTSTRAP_DB: ${MONGO_BOOTSTRAP_DB:-ai_loyalty_engine}
+      MONGO_BOOTSTRAP_URI: ${MONGO_BOOTSTRAP_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-marketing_demo}?authSource=admin&replicaSet=rs1}
+      MONGO_BOOTSTRAP_DB: ${MONGO_BOOTSTRAP_DB:-marketing_demo}
       MONGO_BOOTSTRAP_COLLECTION: ${MONGO_BOOTSTRAP_COLLECTION:-tapdata_runtime_config}
       TAPDATA_IMAGE: ${TAPDATA_IMAGE}
       TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
@@ -110,20 +94,94 @@ services:
       TAPDATA_TOKEN_AUTH_METHOD: ${TAPDATA_TOKEN_AUTH_METHOD:-client_secret_post}
       TAPDATA_ACCESS_TOKEN: ${TAPDATA_ACCESS_TOKEN:-}
       TAPDATA_COLLECTION_MAP: ${TAPDATA_COLLECTION_MAP:-}
+      TAPDATA_METADATA_URI: ${TAPDATA_METADATA_URI:-}
+      TAPDATA_MONGO_URI: ${TAPDATA_MONGO_URI:-}
+      TAPDATA_METADATA_DB: ${TAPDATA_METADATA_DB:-tapdata}
+      TAPDATA_METADATA_COLLECTION: ${TAPDATA_METADATA_COLLECTION:-Application}
+      TAPDATA_METADATA_FILTER_JSON: ${TAPDATA_METADATA_FILTER_JSON:-}
+      TAPDATA_METADATA_CLIENT_ID_PATH: ${TAPDATA_METADATA_CLIENT_ID_PATH:-clientId}
+      TAPDATA_METADATA_CLIENT_SECRET_PATH: ${TAPDATA_METADATA_CLIENT_SECRET_PATH:-clientSecret}
+      TAPDATA_METADATA_CACHE_TTL_MS: ${TAPDATA_METADATA_CACHE_TTL_MS:-300000}
+      TAPDATA_METADATA_TIMEOUT_MS: ${TAPDATA_METADATA_TIMEOUT_MS:-3000}
       TAPDATA_PAGE_SIZE: ${TAPDATA_PAGE_SIZE:-200}
       TAPDATA_REQUEST_TIMEOUT_MS: ${TAPDATA_REQUEST_TIMEOUT_MS:-8000}
       TAPDATA_BODY_TIMEOUT_MS: ${TAPDATA_BODY_TIMEOUT_MS:-8000}
       TAPDATA_SCAN_LIMIT: ${TAPDATA_SCAN_LIMIT:-1000}
-      MONGO_AUDIT_URI: ${MONGO_AUDIT_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-ai_loyalty_engine}?authSource=admin}
-      MONGO_AUDIT_DB: ${MONGO_AUDIT_DB:-ai_loyalty_engine}
+      MONGO_AUDIT_URI: ${MONGO_AUDIT_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-marketing_demo}?authSource=admin&replicaSet=rs1}
+      MONGO_AUDIT_DB: ${MONGO_AUDIT_DB:-marketing_demo}
       MONGO_AUDIT_COLLECTION: ${MONGO_AUDIT_COLLECTION:-ai_action_events}
-      MONGO_SNAPSHOT_URI: ${MONGO_SNAPSHOT_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-ai_loyalty_engine}?authSource=admin}
-      MONGO_SNAPSHOT_DB: ${MONGO_SNAPSHOT_DB:-ai_loyalty_engine}
+      MONGO_SNAPSHOT_URI: ${MONGO_SNAPSHOT_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/${MONGO_DATABASE:-marketing_demo}?authSource=admin&replicaSet=rs1}
+      MONGO_SNAPSHOT_DB: ${MONGO_SNAPSHOT_DB:-marketing_demo}
       MONGO_SNAPSHOT_COLLECTION: ${MONGO_SNAPSHOT_COLLECTION:-live_patrons_snapshot}
       MONGO_DEMO_JOURNEY_COLLECTION: ${MONGO_DEMO_JOURNEY_COLLECTION:-demo_upgrade_journeys}
     ports:
       - "${AI_PANEL_PORT:-3000}:3000"
 
+  source-feeder:
+    profiles: [feeder]
+    build:
+      context: .
+      dockerfile: docker/source-feeder.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      SOURCE_MONGO_URI: ${SOURCE_MONGO_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/casino_source?authSource=admin&replicaSet=rs1}
+      SOURCE_MONGO_DB: ${SOURCE_MONGO_DB:-casino_source}
+      SOURCE_PROFILE_COLLECTION: ${SOURCE_PROFILE_COLLECTION:-source_patron_profiles}
+      SOURCE_SESSION_COLLECTION: ${SOURCE_SESSION_COLLECTION:-source_table_sessions}
+      SOURCE_ACTIVITY_COLLECTION: ${SOURCE_ACTIVITY_COLLECTION:-source_activity_events}
+      SOURCE_INITIAL_PATRONS: ${SOURCE_INITIAL_PATRONS:-60}
+      SOURCE_INITIAL_ACTIVE: ${SOURCE_INITIAL_ACTIVE:-18}
+      FEEDER_INTERVAL_MS: ${FEEDER_INTERVAL_MS:-15000}
+      FEEDER_DURATION_HOURS: ${FEEDER_DURATION_HOURS:-0}
+      FEEDER_TRANSITIONS_PER_TICK: ${FEEDER_TRANSITIONS_PER_TICK:-1}
+      FEEDER_SESSION_UPDATES_PER_TICK: ${FEEDER_SESSION_UPDATES_PER_TICK:-1}
+      FEEDER_MAX_ACTIVE_PATRONS: ${FEEDER_MAX_ACTIVE_PATRONS:-350}
+      FEEDER_TABLE_CAP: ${FEEDER_TABLE_CAP:-25}
+      FEEDER_RISK_RATIO: ${FEEDER_RISK_RATIO:-0.02}
+      FEEDER_SEED: ${FEEDER_SEED:-20260915}
+
+  # Optional wrapper around TapData's own Import API. The official TapData UI
+  # Import button remains the recommended path; this service is opt-in.
+  tapdata-importer:
+    profiles: [import]
+    build:
+      context: .
+      dockerfile: docker/tapdata-import.Dockerfile
+    restart: "no"
+    depends_on:
+      tapdata:
+        condition: service_started
+    environment:
+      TAPDATA_IMPORT_MODE: ${TAPDATA_IMPORT_MODE:-manual}
+      TAPDATA_IMPORT_ROOT: /opt/tapdata-demo/exports
+      TAPDATA_CONNECTION_EXPORT: ${TAPDATA_CONNECTION_EXPORT:-}
+      TAPDATA_TASK_EXPORT: ${TAPDATA_TASK_EXPORT:-}
+      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_CONNECTION_IMPORT_PATH: ${TAPDATA_CONNECTION_IMPORT_PATH:-}
+      TAPDATA_TASK_IMPORT_PATH: ${TAPDATA_TASK_IMPORT_PATH:-}
+      TAPDATA_SOURCE_MONGODB_URI: ${TAPDATA_SOURCE_MONGODB_URI:-}
+      TAPDATA_IMPORT_URI_FIELD: ${TAPDATA_IMPORT_URI_FIELD:-}
+      TAPDATA_IMPORT_TOKEN: ${TAPDATA_IMPORT_TOKEN:-}
+      TAPDATA_IMPORT_CONNECTION_FORM_FIELDS_JSON: ${TAPDATA_IMPORT_CONNECTION_FORM_FIELDS_JSON:-}
+      TAPDATA_IMPORT_TASK_FORM_FIELDS_JSON: ${TAPDATA_IMPORT_TASK_FORM_FIELDS_JSON:-}
+      TAPDATA_IMPORT_FORM_FIELDS_JSON: ${TAPDATA_IMPORT_FORM_FIELDS_JSON:-}
+      TAPDATA_CONNECTION_LIST_PATH: ${TAPDATA_CONNECTION_LIST_PATH:-}
+      TAPDATA_TASK_START_PATH: ${TAPDATA_TASK_START_PATH:-}
+      TAPDATA_TASK_START_METHOD: ${TAPDATA_TASK_START_METHOD:-POST}
+      TAPDATA_TASK_START_BODY_JSON: ${TAPDATA_TASK_START_BODY_JSON:-}
+      TAPDATA_IMPORT_AUTOSTART: ${TAPDATA_IMPORT_AUTOSTART:-false}
+      TAPDATA_IMPORT_TIMEOUT_MS: ${TAPDATA_IMPORT_TIMEOUT_MS:-15000}
+      TAPDATA_IMPORT_ALLOW_MISSING_URI: ${TAPDATA_IMPORT_ALLOW_MISSING_URI:-false}
+      TAPDATA_IMPORT_STATE_DIR: /opt/tapdata-demo/import-state
+      TAPDATA_IMPORT_CONNECTION_FILE_FIELD: ${TAPDATA_IMPORT_CONNECTION_FILE_FIELD:-connectionFile}
+      TAPDATA_IMPORT_TASK_FILE_FIELD: ${TAPDATA_IMPORT_TASK_FILE_FIELD:-taskFile}
+    volumes:
+      - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
+      - ./runtime/tapdata-import:/opt/tapdata-demo/import-state
+    command: ["node", "/importer/tapdata-import.mjs"]
+
 volumes:
   demo_mongo_data:
-  demo_postgres_data:

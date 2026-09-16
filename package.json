@@ -15,7 +15,10 @@
     "source:feed": "node scripts/realtime-source-feeder.mjs",
     "source:feed:once": "node scripts/realtime-source-feeder.mjs --once",
     "source:feed:dry-run": "node scripts/realtime-source-feeder.mjs --dry-run",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "source:feed:mongo": "node scripts/mongo-source-feeder.mjs",
+    "source:feed:mongo:once": "node scripts/mongo-source-feeder.mjs --once",
+    "source:feed:mongo:dry-run": "node scripts/mongo-source-feeder.mjs --dry-run",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern artifacts --ignore-pattern .presentation-build-ai-loyalty --ignore-pattern .presentation-edit-latest",
     "db:generate": "drizzle-kit generate"
   },

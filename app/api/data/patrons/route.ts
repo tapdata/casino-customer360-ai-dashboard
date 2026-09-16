@@ -2,28 +2,15 @@ import { MongoClient } from "mongodb";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { tapDataCollectionLabel, tapDataCollectionUrl } from "../../tapdata-collections";
+import { getTapDataConfig, type TapDataConfig } from "../../../lib/tapdata-config";
 
 type JsonRecord = Record<string, unknown>;
-
-// Keep the published API path configurable (the current deployment uses v1;
-// a future MDM gateway can switch versions without rebuilding the app).
-const DEFAULT_TAPDATA_FIND_PATH_TEMPLATE = "/api/v1/{collection}/find";
 
 // Run this data-heavy function close to the TapData gateway when the selected
 // Vercel plan supports regional functions. It avoids routing every refresh
 // through the default iad1 region before reaching the Macau data endpoint.
 export const preferredRegion = "hkg1";
 export const maxDuration = 20;
-
-type TapDataConfig = {
-  baseUrl: string;
-  accessToken?: string;
-  tokenUrl?: string;
-  clientId?: string;
-  clientSecret?: string;
-  tokenAuthMethod: "client_secret_post" | "client_secret_basic";
-  findPathTemplate: string;
-};
 
 type LivePatron = {
   patronId: string;
@@ -156,24 +143,6 @@ async function writePersistedSnapshot(cache: PatronCache) {
   } catch {
     // Persistent cache is an optimization; TapData remains the source of truth.
   }
-}
-
-function config(): TapDataConfig | null {
-  const baseUrl = process.env.TAPDATA_API_BASE_URL?.replace(/\/$/, "");
-  const accessToken = process.env.TAPDATA_ACCESS_TOKEN;
-  const tokenUrl = process.env.TAPDATA_TOKEN_URL;
-  const clientId = process.env.TAPDATA_CLIENT_ID;
-  const clientSecret = process.env.TAPDATA_CLIENT_SECRET;
-  if (!baseUrl || (!accessToken && !(tokenUrl && clientId && clientSecret))) return null;
-  return {
-    baseUrl,
-    accessToken,
-    tokenUrl,
-    clientId,
-    clientSecret,
-    tokenAuthMethod: process.env.TAPDATA_TOKEN_AUTH_METHOD === "client_secret_basic" ? "client_secret_basic" : "client_secret_post",
-    findPathTemplate: process.env.TAPDATA_FIND_PATH_TEMPLATE || DEFAULT_TAPDATA_FIND_PATH_TEMPLATE,
-  };
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8_000) {
@@ -476,7 +445,7 @@ function activeRisk(record: JsonRecord) {
 }
 
 async function loadPatrons(requestedScanLimit?: number): Promise<LoadPatronsResult> {
-  const current = config();
+  const current = await getTapDataConfig();
   if (!current) throw new Error("TapData is not configured");
   const token = await accessToken(current);
   const configuredScanLimit = Number(process.env.TAPDATA_SCAN_LIMIT) || 1000;

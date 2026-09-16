@@ -21,6 +21,7 @@
 # misc
 .DS_Store
 *.pem
+*.tsbuildinfo
 
 # debug
 npm-debug.log*
@@ -35,6 +36,10 @@ yarn-error.log*
 !.env.source-feeder.example
 !.env.tapdata.example
 !.env.demo.example
+
+# Local/private deployment material. The public kit mounts this directory
+# read-only into TapData but never commits credentials or licenses.
+/secrets/
 
 # vercel
 .vercel
@@ -51,3 +56,13 @@ yarn-error.log*
 /.presentation-build-ai-loyalty/
 /.presentation-build-oracle-mssql-pg-ai/
 /.presentation-edit-latest/
+
+# Private TapData exports and database backups
+/deploy/tapdata/exports/**/*
+!/deploy/tapdata/exports/**/
+!/deploy/tapdata/exports/**/.gitkeep
+!/deploy/tapdata/exports/**/README.md
+*.bson
+*.archive
+*.archive.gz
+*.dump

@@ -4,10 +4,13 @@ This branch adds a reproducible local container boundary for the Macau casino
 Customer 360 story:
 
 ```text
-Oracle / MSSQL / PostgreSQL sources
+MongoDB casino_source (source simulation)
               │  CDC + cleansing + identity merge in TapData
               ▼
-       MongoDB MDM collections
+       MongoDB marketing_fdm (normalized FDM)
+              │  rename + master/child merge in TapData
+              ▼
+       MongoDB marketing_mdm (AI-ready MDM)
               │  published TapData APIs
               ▼
         AI loyalty dashboard (Next.js + DeepSeek)
@@ -15,23 +18,21 @@ Oracle / MSSQL / PostgreSQL sources
 
 ## What is included
 
-- `docker-compose.demo.yml`: MongoDB, TapData, the AI panel, and an optional
-  PostgreSQL source profile.
+- `docker-compose.demo.yml`: one authenticated MongoDB single-node replica set (`rs1`) with separate source/FDM/MDM
+  databases, TapData, the AI panel, and an optional Mongo-only source feeder.
 - `docker/ai-panel.Dockerfile`: production Next.js image; secrets are runtime
   environment variables, never build-time source files.
 - `.env.demo.example`: redacted configuration template.
-- `scripts/demo.sh`: repeatable `up`, `sources`, `down`, `status`, `logs`, and a
-  guarded `reset` command.
+- `scripts/demo-docker.sh`: repeatable `up`, `feeder`, `all`, `once`, `down`,
+  `restart`, `status`, `logs`, `health`, and a guarded `reset` command.
 - `deploy/tapdata/`: the versioned location for TapData-generated exports and
   the import checklist.
 
-The public repository does not redistribute proprietary Oracle/MSSQL/TapData
-installers or licenses. PostgreSQL is provided as an optional service because
-its container image is straightforward to run; Oracle and MSSQL should be
-connected from licensed images or an existing environment. The selected
-TapData image and edition must be supplied/approved by the operator. In many
-editions Java is already part of the TapData runtime, so a separate Java
-container is not required for the panel.
+The public repository does not redistribute proprietary TapData installers or
+licenses. Oracle/MSSQL/PostgreSQL are intentionally not required: the feeder
+writes source-shaped documents to `casino_source`, and TapData moves them
+through the FDM and MDM databases. Java is already part of the TapData runtime
+image; no separate Java container is required for the panel.
 
 ## Quick start
 
@@ -39,24 +40,64 @@ Prerequisites: Docker Desktop or Docker Engine with Compose v2.
 
 ```bash
 cp .env.demo.example .env.demo
-# edit .env.demo: TapData image/version, API URL, OAuth client, and DeepSeek key
-./scripts/demo.sh up
+# edit .env.demo: Mongo password, DeepSeek key, and TapData API/OAuth values
+./scripts/demo-docker.sh up
 ```
 
 Open the AI panel at `http://localhost:${AI_PANEL_PORT:-3000}` and TapData at
 `http://localhost:${TAPDATA_UI_PORT:-3030}`. The published API URL can point to
 the local TapData container or to an externally managed TapData instance.
 
-To include the optional PostgreSQL source container:
+To also seed and continuously mutate the Mongo-only source data:
 
 ```bash
-./scripts/demo.sh sources
+./scripts/demo-docker.sh feeder
+# or start the core stack and feeder together:
+./scripts/demo-docker.sh all
 ```
 
-The source feeder is deliberately not started by default. It requires the
-Oracle/MSSQL/PostgreSQL endpoints and credentials in a private
-`.env.source-feeder`; run it only after those sources are reachable and after
-CDC tasks are healthy.
+The default feeder interval is 15 seconds, with at most one customer
+transition and one session update per tick. It respects a 350 active-customer
+cap, a 25-person table cap, and a 2% risk ratio. Set
+`FEEDER_DURATION_HOURS` to stop automatically; `0` means no time limit.
+
+### Automatic TapData OAuth discovery
+
+The AI panel can obtain the API OAuth client without copying the client secret
+into a second application configuration. TapData stores the API Explorer client
+in the `tapdata.Application` collection; the default lookup is:
+
+```text
+database:   tapdata
+collection: Application
+filter:     { "name": "Data Explorer" }
+fields:     clientId, clientSecret
+```
+
+At runtime the server uses this order:
+
+1. `TAPDATA_ACCESS_TOKEN`, when supplied;
+2. explicit `TAPDATA_CLIENT_ID` + `TAPDATA_CLIENT_SECRET`;
+3. a metadata lookup using `TAPDATA_METADATA_URI`, or `TAPDATA_MONGO_URI` when it points to the actual TapData metadata service.
+
+For a remote/managed TapData instance, set `TAPDATA_METADATA_URI` to a MongoDB
+URI reachable from the AI server and keep the metadata database credentials
+server-side. The database, collection, filter, and field paths are configurable
+with `TAPDATA_METADATA_*` variables. The lookup has a 3-second connection
+timeout and is cached in the server process for 5 minutes, so dashboard polls
+do not query the metadata database repeatedly. Credentials are held only in
+server memory; they are never returned to browser code or written to logs.
+
+The `TAPDATA_STORE_CREDENTIALS` bootstrap option controls whether the bootstrap
+record stores credential values; leave it `false` (the default). Changing
+environment variables requires restarting the AI-panel container, as with any
+container environment change. Changing the TapData `Application` record does
+not require a code change; it is picked up after the cache expires or the
+container restarts. If metadata discovery is unavailable, provide the explicit
+client pair or a short-lived `TAPDATA_ACCESS_TOKEN` as a fallback.
+
+The source feeder is deliberately not started by `up`; use the `feeder` or
+`all` command after the TapData tasks are healthy.
 
 ## Configuration contract
 
@@ -93,17 +134,112 @@ TapData UI/API. Keep these checks in the demo runbook:
 5. A small test mutation in each source is visible through CDC, the MDM target,
    and the corresponding API before the AI demo starts.
 
+### Official Import versus optional command-line automation
+
+The **Import** button in the TapData Data Transformation screen is the
+official and preferred path. It understands the export format of the running
+TapData edition and lets the operator review mappings before anything starts:
+
+1. Import `MongoDB_Source-20260915.xlsx` as the connection export.
+2. Import `TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz` as
+   the task export.
+3. Review connection names, source/target mappings, and join/write paths.
+4. Start the task only after the initial-load count and target collection look
+   correct.
+
+The shared `module_batch-20260915.json.gz` file is a published-API module
+package (69 records/23 modules, `/api/v1`); it is **not** a CDC task export.
+Import it through the API/service import screen only when that screen is
+available in the selected TapData edition.
+
+This repository also contains an **opt-in wrapper** for repeatable setup:
+`scripts/tapdata-import.mjs`. It validates the artifacts offline and can call
+the exact connection/task import endpoints supplied by the operator. It does
+not guess private TapData endpoints, rewrite credentials, overwrite existing
+tasks, or start tasks by default. This is deliberate: import routes and form
+field names vary between TapData editions.
+
+```bash
+# Put private exports in the local, ignored mount (do not commit them):
+mkdir -p deploy/tapdata/exports/connections deploy/tapdata/exports/tasks
+cp /path/to/MongoDB_Source-20260915.xlsx deploy/tapdata/exports/connections/
+cp /path/to/TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz \
+  deploy/tapdata/exports/tasks/
+
+# Offline validation + a redacted manifest; no TapData network call:
+./scripts/demo-docker.sh prepare-import
+
+# Only after confirming the exact routes/body fields for this TapData build:
+./scripts/demo-docker.sh import
+# Optional, and only when an exact start route is configured:
+./scripts/demo-docker.sh task-start
+```
+
+Configure the exact routes and request fields in `.env.demo` (for example,
+`TAPDATA_CONNECTION_IMPORT_PATH`, `TAPDATA_TASK_IMPORT_PATH`, and the JSON
+form-field variables). Leave `TAPDATA_IMPORT_MODE=manual` and
+`TAPDATA_IMPORT_AUTOSTART=false` until an operator has reviewed the import
+result. A missing route causes the wrapper to fail closed rather than make a
+guess. The source MongoDB URI must be reachable **from the importer/TapData
+container**; use `mongodb://mongo:27017/...` for the bundled service, not
+`127.0.0.1`.
+
 ## Lifecycle and safety
 
 ```bash
-./scripts/demo.sh status
-SERVICE=ai-panel ./scripts/demo.sh logs
-./scripts/demo.sh down                 # keeps data volumes
-RESET_VOLUMES_CONFIRM=YES ./scripts/demo.sh reset  # deletes demo volumes
+./scripts/demo-docker.sh status
+SERVICE=ai-panel ./scripts/demo-docker.sh logs
+./scripts/demo-docker.sh health
+./scripts/demo-docker.sh down                 # keeps data volumes
+RESET_VOLUMES_CONFIRM=YES ./scripts/demo-docker.sh reset  # deletes volumes
 ```
 
 `reset` is intentionally opt-in because it deletes the local demo databases.
 The compose volumes are local; for a team deployment, use managed MongoDB and
-secret storage, pin image versions, restrict TapData/API network exposure, and
-rotate OAuth/AI credentials.
+secret storage, pin the TapData image instead of `latest`, restrict
+TapData/API network exposure, and rotate OAuth/AI credentials.
 
+## What is still required for a true one-command hand-off
+
+The current kit starts the containers and mounts reviewed exports, but two
+vendor-specific items still require confirmation from the target TapData
+edition:
+
+1. Confirm the connection/task import routes and request fields if the
+   optional wrapper is to be used. The supplied
+   `module_batch-20260915.json.gz` contains 69 records covering 23 API modules
+   (all `/api/v1`); it is not a task export and is not auto-imported by this
+   repository.
+2. After the first TapData login, create the instance-specific OAuth client
+   and publish the services. Put the resulting client ID/secret (or a
+   reachable metadata URI for discovery) in `.env.demo`; credentials cannot be
+   generated generically because they belong to each TapData installation.
+
+After those two items are supplied, the remaining setup is environment
+configuration only: `MONGO_ROOT_PASSWORD`, `DEEPSEEK_API_KEY`, TapData API
+base/token URLs, and (if needed) the collection map. Then
+`./scripts/demo-docker.sh all` brings up the complete local demo.
+
+## Validation and remaining local setup (2026-09-16)
+
+The bundled MongoDB initializes `rs1` with the container address `mongo:27017`
+and keeps its internal authentication key in its data volume. This enables CDC
+inside the Compose network. Host-side tools need `directConnection=true` when
+using the published localhost port. No original business database is restored
+or backed up by these commands.
+
+The separate demo MongoDB does not contain TapData's embedded metadata. Leave
+`TAPDATA_MONGO_URI` empty unless it is the actual metadata endpoint; otherwise
+supply the explicit OAuth client pair.
+
+Private exports and database archives are excluded from Git and Docker build
+contexts. The importer runs with `--no-deps`, so preparing exports does not
+start TapData. Import and start routes must be configured for the target edition.
+Actual connection/task/API exports are not included in this checkout, so live
+import and end-to-end CDC/API validation remain pending.
+
+Verified locally: production Next.js build and 7 tests pass; Compose config
+validation and changed-module lint pass. An isolated MongoDB container became
+healthy with `rs1` primary. A one-shot feeder seeded 12 synthetic patrons with
+a configured active limit of 3 and retained that limit after its first tick.
+This does not verify the TapData image, live imports, or the full CDC pipeline.

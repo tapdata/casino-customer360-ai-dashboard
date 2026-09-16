@@ -26,12 +26,17 @@ usage() {
 Usage: ./scripts/demo-docker.sh <command>
 
 Commands:
-  up       Build and start MongoDB, TapData and the AI panel
-  sources  Start the optional local PostgreSQL source profile as well
+  up       Build and start MongoDB, TapData, bootstrap and the AI panel
+  feeder   Start the optional Mongo-only source feeder
+  all      Start the core stack and the Mongo-only source feeder
+  once     Run one feeder tick and exit (does not keep a feeder running)
   down     Stop containers (keeps named volumes)
-  restart  Rebuild and recreate the application services
+  restart  Rebuild and recreate the core application services
+  prepare-import  Validate export files and write a redacted import manifest
+  import   Optionally call the exact TapData import endpoints you configured
+  task-start  Optionally call the exact TapData task-start endpoint you configured
   status   Show container status
-  logs     Follow all service logs (SERVICE=ai-panel narrows it)
+  logs     Follow logs (SERVICE=ai-panel or source-feeder narrows it)
   health   Check the AI panel and MongoDB container state
   reset    Delete containers and volumes only with RESET_VOLUMES_CONFIRM=YES
 EOF
@@ -44,10 +49,20 @@ case "${command}" in
     compose up -d --build
     compose ps
     ;;
-  sources)
+  feeder|sources)
     compose config --quiet
-    compose --profile sources up -d --build
+    compose --profile feeder up -d --build source-feeder
     compose ps
+    ;;
+  all)
+    compose config --quiet
+    compose up -d --build
+    compose --profile feeder up -d --build source-feeder
+    compose ps
+    ;;
+  once)
+    compose config --quiet
+    compose --profile feeder run --rm --build source-feeder node /feeder/mongo-source-feeder.mjs --once
     ;;
   down) compose down ;;
   restart)
@@ -55,18 +70,26 @@ case "${command}" in
     compose up -d --build --force-recreate
     compose ps
     ;;
+  prepare-import)
+    compose config --quiet
+    compose --profile import run --rm --build --no-deps tapdata-importer node /importer/tapdata-import.mjs prepare
+    ;;
+  import)
+    compose config --quiet
+    compose --profile import run --rm --build --no-deps tapdata-importer node /importer/tapdata-import.mjs api
+    ;;
+  task-start)
+    compose config --quiet
+    compose --profile import run --rm --build --no-deps tapdata-importer node /importer/tapdata-import.mjs start
+    ;;
   status) compose ps ;;
   logs)
     if [[ -n "${SERVICE:-}" ]]; then compose logs -f "${SERVICE}"; else compose logs -f; fi
     ;;
   health)
     compose ps
-    if command -v curl >/dev/null 2>&1; then
-      curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${AI_PANEL_PORT:-3000}/" >/dev/null
-      printf 'AI panel: OK (http://127.0.0.1:%s)\n' "${AI_PANEL_PORT:-3000}"
-    else
-      printf 'curl is not installed; inspect the status above.\n'
-    fi
+    compose exec -T mongo mongosh --quiet --host 127.0.0.1 /opt/demo/replica-health.js
+    compose exec -T ai-panel node -e 'fetch("http://127.0.0.1:3000/", {signal: AbortSignal.timeout(5000)}).then(r => { if (!r.ok) process.exit(1); console.log("AI panel: OK"); }).catch(() => process.exit(1))'
     ;;
   reset)
     if [[ "${RESET_VOLUMES_CONFIRM:-}" != "YES" ]]; then
