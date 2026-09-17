@@ -45,15 +45,21 @@ Responses generated from fallback data are clearly marked as simulated.
 
 ## Real-time source feeder
 
-To demo real CDC changes, use the source feeder to continuously insert or update matching customer events in Oracle, MSSQL, and PostgreSQL:
+The Docker demo restores a private backup of `tapdata_casino_marketing` and
+updates existing `patron_profiles` / `patron_table_sessions` documents. Identity,
+risk flags and active status are preserved. Writes are disabled by default.
 
 ```bash
-npm install pg mssql oracledb
-cp .env.source-feeder.example .env.source-feeder
-npm run source:feed
+./scripts/demo-docker.sh prepare
+# After approving data writes, set FEEDER_WRITE_ENABLED=true in .env.demo:
+./scripts/demo-docker.sh once
+# Or run continuously:
+./scripts/demo-docker.sh feeder
 ```
 
-The feeder writes one small logical casino-customer change across the three source systems every 3 seconds by default for fast demos. Each cycle is capped at three customers; TapData CDC can then capture the changes, merge them into MongoDB MDM collections, publish APIs, and refresh the AI panel. See `SOURCE_FEEDER.md` for the full runbook.
+See `DOCKER_DEMO_KIT.md` for backup placement and deployment. All
+`npm run source:feed*` commands now target this MongoDB source; the earlier
+Oracle/MSSQL/PostgreSQL script remains a separate legacy implementation.
 
 ## Configure DeepSeek AI and TapData APIs
 

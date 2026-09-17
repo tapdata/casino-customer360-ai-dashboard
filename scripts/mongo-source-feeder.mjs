@@ -1,258 +1,116 @@
-import { MongoClient } from "mongodb";
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
-const argv = new Set(process.argv.slice(2));
-const asInt = (name, fallback, min = 0) => {
-  const value = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isFinite(value) && value >= min ? value : fallback;
-};
-const asFloat = (name, fallback, min = 0, max = 1) => {
-  const value = Number.parseFloat(process.env[name] ?? "");
-  return Number.isFinite(value) && value >= min && value <= max ? value : fallback;
-};
-
-const user = process.env.MONGO_ROOT_USER ?? "demo_admin";
-const password = process.env.MONGO_ROOT_PASSWORD ?? "change-me";
-const defaultUri = `mongodb://${encodeURIComponent(user)}:${encodeURIComponent(password)}@mongo:27017/casino_source?authSource=admin`;
-const uri = process.env.SOURCE_MONGO_URI || defaultUri;
-const dbName = process.env.SOURCE_MONGO_DB || "casino_source";
-const profileCollection = process.env.SOURCE_PROFILE_COLLECTION || "source_patron_profiles";
-const sessionCollection = process.env.SOURCE_SESSION_COLLECTION || "source_table_sessions";
-const activityCollection = process.env.SOURCE_ACTIVITY_COLLECTION || "source_activity_events";
-
-const initialPatrons = asInt("SOURCE_INITIAL_PATRONS", 60, 1);
-const initialActive = Math.min(asInt("SOURCE_INITIAL_ACTIVE", 18, 0), initialPatrons);
-const seedActiveCount = Math.min(initialActive, asInt("FEEDER_MAX_ACTIVE_PATRONS", 350, 1), 30 * asInt("FEEDER_TABLE_CAP", 25, 1));
-const intervalMs = asInt("FEEDER_INTERVAL_MS", 15000, 1000);
-const durationHours = asFloat("FEEDER_DURATION_HOURS", 0, 0, 24 * 365);
-const transitionsPerTick = asInt("FEEDER_TRANSITIONS_PER_TICK", 1, 0);
-const sessionUpdatesPerTick = asInt("FEEDER_SESSION_UPDATES_PER_TICK", 1, 0);
-const maxActive = asInt("FEEDER_MAX_ACTIVE_PATRONS", 350, 1);
-const tableCap = asInt("FEEDER_TABLE_CAP", 25, 1);
-const riskRatio = asFloat("FEEDER_RISK_RATIO", 0.02, 0, 1);
-const seed = asInt("FEEDER_SEED", 20260915, 0);
-
-const tables = Array.from({ length: 30 }, (_, index) => `T-${String(index + 1).padStart(4, "0")}`);
-const games = ["Baccarat", "Blackjack", "Roulette", "Sic Bo", "Poker"];
-const regions = ["Macau", "Hong Kong", "Mainland China", "Singapore", "Taiwan"];
-const behaviorTags = ["Steady", "PromoSeeker", "Conservative", "LateNight", "HighValueReturn"];
-
-// Small deterministic PRNG: repeatable demo data without relying on Math.random.
-let state = (seed >>> 0) || 1;
-const random = () => {
-  state = (1664525 * state + 1013904223) >>> 0;
-  return state / 0x100000000;
-};
-const pick = (items) => items[Math.floor(random() * items.length)];
-const now = () => new Date();
-const customerId = (index) => `SRC-P-${String(index + 1).padStart(6, "0")}`;
-const profileId = (index) => `src-profile-${String(index + 1).padStart(6, "0")}`;
-const sessionId = (index) => `src-session-${String(index + 1).padStart(6, "0")}`;
-
-const tierFor = (adt) => {
-  if (adt >= 500000) return "Diamond";
-  if (adt >= 200000) return "Platinum";
-  if (adt >= 80000) return "Gold";
-  if (adt >= 20000) return "Silver";
-  return "Bronze";
-};
-
-const activeProfileFilter = { is_active: true };
-
-function buildProfile(index, active, generatedAt) {
-  const adt = Math.round(5000 + random() * 95000);
-  const risk = active && random() < riskRatio;
+export const SOURCE_DATABASE = 'tapdata_casino_marketing';
+export function feederConfig(env = process.env) {
+  const integer = (name, fallback, min, max) => {
+    if (!env[name]) return fallback;
+    const n = Number(env[name]);
+    if (!Number.isSafeInteger(n) || n < min || n > max) throw new Error(`Invalid ${name}`);
+    return n;
+  };
+  if (env.SOURCE_MONGO_DB && env.SOURCE_MONGO_DB !== SOURCE_DATABASE) throw new Error('Source database must be tapdata_casino_marketing');
   return {
-    _id: profileId(index),
-    source_customer_id: customerId(index),
-    source_player_id: `PLAYER-${String(index + 100861).padStart(6, "0")}`,
-    display_name: `Demo Patron ${String(index + 1).padStart(3, "0")}`,
-    masked_name: `D***${String(index % 10)}`,
-    tier: tierFor(adt),
-    region: pick(regions),
-    is_active: active,
-    risk_flags: risk ? ["ResponsiblePlayReview"] : [],
-    preferred_games: [pick(games)],
-    adt,
-    points_balance: Math.round(adt * (1.5 + random() * 2.5)),
-    updated_at: generatedAt,
-    created_at: generatedAt,
+    database: SOURCE_DATABASE,
+    writeEnabled: env.FEEDER_WRITE_ENABLED === 'true',
+    intervalMs: integer('FEEDER_INTERVAL_MS', 15000, 1000, 3600000),
+    updates: integer('FEEDER_SESSION_UPDATES_PER_TICK', 1, 1, 25),
+    increment: integer('FEEDER_BET_INCREMENT', 500, 1, 10000),
+    durationHours: integer('FEEDER_DURATION_HOURS', 0, 0, 8760),
   };
 }
 
-function buildSession(index, profile, generatedAt, tableId = null) {
-  const selectedTable = profile.is_active ? tableId ?? tables[index % tables.length] : null;
-  const amount = profile.is_active ? Math.round(1000 + random() * 30000) : 0;
-  return {
-    _id: sessionId(index),
-    source_customer_id: profile.source_customer_id,
-    table_id: selectedTable,
-    game_type: profile.is_active ? pick(games) : null,
-    session_bet_amount: amount,
-    current_stack_estimate: profile.is_active ? Math.round(amount * (0.7 + random() * 1.8)) : 0,
-    seated_at: profile.is_active ? generatedAt : null,
-    last_action_at: generatedAt,
-    is_active: profile.is_active,
-    behavior_tags: profile.is_active ? [pick(behaviorTags)] : [],
-    updated_at: generatedAt,
-  };
-}
-
-async function seedData(db) {
-  const profiles = [];
-  const sessions = [];
-  const activities = [];
-  const generatedAt = now();
-  for (let index = 0; index < initialPatrons; index += 1) {
-    const profile = buildProfile(index, index < seedActiveCount, generatedAt);
-    profiles.push(profile);
-    sessions.push(buildSession(index, profile, generatedAt, profile.is_active ? tables[index % tables.length] : null));
-    activities.push({
-      _id: `src-activity-${String(index + 1).padStart(6, "0")}`,
-      source_customer_id: profile.source_customer_id,
-      activity_type: profile.is_active ? "SESSION_OPEN" : "PROFILE_SEEDED",
-      amount: profile.is_active ? sessions.at(-1).session_bet_amount : 0,
-      occurred_at: generatedAt,
-      source: "mongo-source-feeder",
-      metadata: { seed },
-    });
+export function buildChanges(session, profile, increment, stamp) {
+  for (const value of [session.sessionBetAmount, session.currentStackEstimate, profile.adt, profile.pointsBalance]) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('Source numeric fields are invalid');
   }
-  await db.collection(profileCollection).bulkWrite(
-    profiles.map((document) => ({ updateOne: { filter: { _id: document._id }, update: { $setOnInsert: document }, upsert: true } })),
-    { ordered: false },
-  );
-  await db.collection(sessionCollection).bulkWrite(
-    sessions.map((document) => ({ updateOne: { filter: { _id: document._id }, update: { $setOnInsert: document }, upsert: true } })),
-    { ordered: false },
-  );
-  await db.collection(activityCollection).bulkWrite(
-    activities.map((document) => ({ updateOne: { filter: { _id: document._id }, update: { $setOnInsert: document }, upsert: true } })),
-    { ordered: false },
-  );
-  return profiles.length;
+  const adtIncrement = Math.round(increment * 0.25);
+  const pointsIncrement = Math.round(increment * 1.5);
+  return {
+    session: {
+      $inc: { sessionBetAmount: increment, currentStackEstimate: Math.round(increment / 2) },
+      $set: { previousBetAmount: session.sessionBetAmount, lastActionAt: stamp, updatedAt: stamp },
+    },
+    profile: {
+      $inc: { adt: adtIncrement, pointsBalance: pointsIncrement },
+      $set: { lastActiveAt: stamp, updatedAt: stamp },
+    },
+    snapshot: { $set: {
+      'patronSnapshot.adt': profile.adt + adtIncrement,
+      'patronSnapshot.pointsBalance': profile.pointsBalance + pointsIncrement,
+      'patronSnapshot.updatedAt': stamp,
+      'patronSnapshot.lastActiveAt': stamp,
+    } },
+  };
 }
 
-async function loadTableCounts(sessionCol) {
-  const rows = await sessionCol.aggregate([
-    { $match: { is_active: true, table_id: { $ne: null } } },
-    { $group: { _id: "$table_id", count: { $sum: 1 } } },
+export async function runTick(client, config) {
+  if (!config.writeEnabled) throw new Error('Writes are disabled; explicit FEEDER_WRITE_ENABLED=true is required after approval');
+  const { Double } = await import('mongodb');
+  const db = client.db(SOURCE_DATABASE);
+  const sessions = db.collection('patron_table_sessions');
+  const profiles = db.collection('patron_profiles');
+  const candidates = await sessions.aggregate([
+    { $match: { isActive: 1, playerId: { $type: 'string' } } },
+    { $sample: { size: config.updates } },
+    { $project: { _id: 1 } },
   ]).toArray();
-  return new Map(rows.map((row) => [row._id, row.count]));
-}
-
-function pickAvailableTable(tableCounts) {
-  const available = tables.filter((tableId) => (tableCounts.get(tableId) ?? 0) < tableCap);
-  return available.length > 0 ? pick(available) : null;
-}
-
-async function tick(db, tickNumber) {
-  const profileCol = db.collection(profileCollection);
-  const sessionCol = db.collection(sessionCollection);
-  const activityCol = db.collection(activityCollection);
-  const active = await profileCol.find(activeProfileFilter, { projection: { _id: 1, source_customer_id: 1, tier: 1, adt: 1 } }).toArray();
-  const inactive = await profileCol.find({ is_active: false }, { projection: { _id: 1, source_customer_id: 1, tier: 1, adt: 1 } }).toArray();
-  const tableCounts = await loadTableCounts(sessionCol);
-  let transitions = 0;
-  let sessionUpdates = 0;
-  const stamp = now();
-
-  for (let i = 0; i < transitionsPerTick; i += 1) {
-    const shouldLeave = active.length > Math.max(1, seedActiveCount) && (inactive.length === 0 || random() < 0.55);
-    const selected = shouldLeave ? pick(active) : pick(inactive);
-    const nextTable = shouldLeave ? null : pickAvailableTable(tableCounts);
-    if (!selected || (!shouldLeave && (active.length >= maxActive || !nextTable))) continue;
-    const nextActive = !shouldLeave;
-    // Capture the current table before clearing it on a leave transition so
-    // the in-memory table occupancy stays consistent with MongoDB.
-    const previousSession = shouldLeave
-      ? await sessionCol.findOne(
-          { source_customer_id: selected.source_customer_id },
-          { projection: { table_id: 1 } },
-        )
-      : null;
-    await profileCol.updateOne({ _id: selected._id }, { $set: { is_active: nextActive, updated_at: stamp } });
-    await sessionCol.updateOne(
-      { source_customer_id: selected.source_customer_id },
-      { $set: { is_active: nextActive, table_id: nextTable, game_type: nextActive ? pick(games) : null, seated_at: nextActive ? stamp : null, last_action_at: stamp, updated_at: stamp } },
-    );
-    await activityCol.insertOne({ source_customer_id: selected.source_customer_id, activity_type: nextActive ? "SESSION_OPEN" : "SESSION_CLOSE", amount: 0, occurred_at: stamp, source: "mongo-source-feeder", metadata: { tick: tickNumber } });
-    if (nextActive) {
-      tableCounts.set(nextTable, (tableCounts.get(nextTable) ?? 0) + 1);
-      active.push(selected);
-      const inactiveIndex = inactive.findIndex((item) => item._id === selected._id);
-      if (inactiveIndex >= 0) inactive.splice(inactiveIndex, 1);
-    } else {
-      if (previousSession?.table_id) {
-        tableCounts.set(
-          previousSession.table_id,
-          Math.max(0, (tableCounts.get(previousSession.table_id) ?? 1) - 1),
-        );
-      }
-      const activeIndex = active.findIndex((item) => item._id === selected._id);
-      if (activeIndex >= 0) active.splice(activeIndex, 1);
-      inactive.push(selected);
-    }
-    transitions += 1;
+  let updated = 0;
+  for (const candidate of candidates) {
+    const transaction = client.startSession();
+    try {
+      const changed = await transaction.withTransaction(async () => {
+        const session = await sessions.findOne({ _id: candidate._id, isActive: 1 }, { session: transaction });
+        if (!session) return false;
+        const matches = await profiles.find({ playerId: session.playerId }, { session: transaction }).limit(2).toArray();
+        if (matches.length !== 1) throw new Error('Source session must have exactly one matching profile');
+        const profile = matches[0];
+        const changes = buildChanges(session, profile, config.increment, new Date());
+        changes.session.$set.previousBetAmount = new Double(changes.session.$set.previousBetAmount);
+        changes.snapshot.$set['patronSnapshot.adt'] = new Double(changes.snapshot.$set['patronSnapshot.adt']);
+        await sessions.updateOne({ _id: session._id }, changes.session, { session: transaction });
+        await profiles.updateOne({ _id: profile._id }, changes.profile, { session: transaction });
+        await sessions.updateMany({ playerId: session.playerId, patronSnapshot: { $type: 'object' } }, changes.snapshot, { session: transaction });
+        return true;
+      }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+      if (changed) updated++;
+    } finally { await transaction.endSession(); }
   }
-
-  const shuffled = [...active].sort(() => random() - 0.5).slice(0, sessionUpdatesPerTick);
-  for (const profile of shuffled) {
-    const increment = Math.round(1000 + random() * 9000);
-    await sessionCol.updateOne(
-      { source_customer_id: profile.source_customer_id },
-      { $inc: { session_bet_amount: increment, current_stack_estimate: Math.round(increment * (0.4 + random() * 0.8)) }, $set: { last_action_at: stamp, updated_at: stamp } },
-    );
-    const adtIncrement = Math.round(increment * 0.25);
-    const currentAdt = Number(profile.adt ?? 0);
-    const nextAdt = currentAdt + adtIncrement;
-    await profileCol.updateOne({ _id: profile._id }, { $inc: { adt: adtIncrement, points_balance: Math.round(increment * 1.5) }, $set: { tier: tierFor(nextAdt), updated_at: stamp } });
-    profile.adt = nextAdt;
-    profile.tier = tierFor(nextAdt);
-    await activityCol.insertOne({ source_customer_id: profile.source_customer_id, activity_type: "BET_UPDATE", amount: increment, occurred_at: stamp, source: "mongo-source-feeder", metadata: { tick: tickNumber } });
-    sessionUpdates += 1;
-  }
-  const activeCount = await profileCol.countDocuments(activeProfileFilter);
-  return { transitions, sessionUpdates, activeCount };
+  return { updated, database: SOURCE_DATABASE };
 }
 
 async function main() {
-  if (argv.has("--dry-run")) {
-    console.log(`[feeder] dry-run db=${dbName} patrons=${initialPatrons} active=${seedActiveCount} intervalMs=${intervalMs} durationHours=${durationHours || "unlimited"}`);
+  const args = new Set(process.argv.slice(2));
+  if ([...args].some(arg => !['--once', '--dry-run'].includes(arg))) throw new Error('Unknown feeder option');
+  const config = feederConfig();
+  if (args.has('--dry-run')) {
+    console.log(JSON.stringify({ ...config, mode: 'offline-plan', collections: ['patron_profiles', 'patron_table_sessions'], createsCustomers: false, changesActiveStatus: false }));
     return;
   }
+  if (!config.writeEnabled) throw new Error('Writes are disabled; obtain approval before setting FEEDER_WRITE_ENABLED=true');
+  const uri = process.env.SOURCE_MONGO_URI;
+  if (!uri) throw new Error('SOURCE_MONGO_URI is required');
+  const { MongoClient } = await import('mongodb');
   const client = new MongoClient(uri, { serverSelectionTimeoutMS: 5000, connectTimeoutMS: 5000 });
-  let timer;
-  let tickNumber = 0;
-  const stop = async (signal) => {
-    if (timer) clearInterval(timer);
-    console.log(`[feeder] stopping signal=${signal}`);
-    await client.close();
-    process.exit(0);
-  };
-  process.on("SIGINT", () => void stop("SIGINT"));
-  process.on("SIGTERM", () => void stop("SIGTERM"));
-  await client.connect();
-  const db = client.db(dbName);
-  const seeded = await seedData(db);
-  console.log(`[feeder] ready db=${dbName} seeded=${seeded} active=${seedActiveCount}/${initialPatrons} tableCap=${tableCap} intervalMs=${intervalMs}`);
-  let tickRunning = false;
-  const runTick = async () => {
-    if (tickRunning) return;
-    tickRunning = true;
-    tickNumber += 1;
-    try {
-      const result = await tick(db, tickNumber);
-      console.log(`[feeder] tick=${tickNumber} transitions=${result.transitions} sessionUpdates=${result.sessionUpdates} active=${result.activeCount}/${initialPatrons}`);
-    } finally {
-      tickRunning = false;
-    }
-  };
-  await runTick();
-  if (argv.has("--once")) return stop("once");
-  timer = setInterval(() => void runTick().catch((error) => console.error(`[feeder] tick-error ${error.message}`)), intervalMs);
-  if (durationHours > 0) setTimeout(() => void stop("duration"), durationHours * 60 * 60 * 1000);
+  let stopped = false;
+  let wake;
+  const stop = () => { stopped = true; wake?.(); };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  const deadline = config.durationHours ? Date.now() + config.durationHours * 3600000 : Infinity;
+  try {
+    await client.connect();
+    do {
+      if (stopped) break;
+      console.log(JSON.stringify(await runTick(client, config)));
+      if (args.has('--once') || Date.now() >= deadline || stopped) break;
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, Math.min(config.intervalMs, Math.max(0, deadline - Date.now())));
+        wake = () => { clearTimeout(timer); resolve(); };
+      });
+    } while (!stopped && Date.now() < deadline);
+  } finally { await client.close(); }
 }
-
-main().catch((error) => {
-  console.error(`[feeder] fatal ${error.stack || error.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  main().catch(() => { console.error('[feeder] stopped: verify write approval, source configuration, replica set and schema; no credential details are logged'); process.exitCode = 1; });
+}

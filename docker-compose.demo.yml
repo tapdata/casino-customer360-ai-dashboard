@@ -27,7 +27,21 @@ services:
       timeout: 5s
       retries: 20
 
+  source-restore:
+    image: mongo:7
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      SOURCE_RESTORE_URI: mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/tapdata_casino_marketing?authSource=admin&replicaSet=rs1
+    volumes:
+      - ./secrets/mongo-source:/backup:ro
+      - ./scripts/mongo-source-restore.cjs:/restore.cjs:ro
+    entrypoint: ["mongosh", "--nodb", "--quiet", "/restore.cjs"]
+
   tapdata:
+    profiles: [bundled-tapdata]
     image: ${TAPDATA_IMAGE:-ghcr.io/tapdata/tapdata:latest}
     privileged: true
     restart: unless-stopped
@@ -35,6 +49,7 @@ services:
       - "${TAPDATA_UI_PORT:-3030}:3030"
       - "${TAPDATA_API_PORT:-3080}:3080"
     volumes:
+      - demo_tapdata_data:/tapdata/data
       - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
       - ./secrets:/opt/tapdata-demo/secrets:ro
 
@@ -74,9 +89,9 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-      tapdata:
-        condition: service_started
       bootstrap:
+        condition: service_completed_successfully
+      source-restore:
         condition: service_completed_successfully
     environment:
       NODE_ENV: production
@@ -122,26 +137,18 @@ services:
     build:
       context: .
       dockerfile: docker/source-feeder.Dockerfile
-    restart: unless-stopped
+    restart: "no"
     depends_on:
-      mongo:
-        condition: service_healthy
+      source-restore:
+        condition: service_completed_successfully
     environment:
-      SOURCE_MONGO_URI: ${SOURCE_MONGO_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/casino_source?authSource=admin&replicaSet=rs1}
-      SOURCE_MONGO_DB: ${SOURCE_MONGO_DB:-casino_source}
-      SOURCE_PROFILE_COLLECTION: ${SOURCE_PROFILE_COLLECTION:-source_patron_profiles}
-      SOURCE_SESSION_COLLECTION: ${SOURCE_SESSION_COLLECTION:-source_table_sessions}
-      SOURCE_ACTIVITY_COLLECTION: ${SOURCE_ACTIVITY_COLLECTION:-source_activity_events}
-      SOURCE_INITIAL_PATRONS: ${SOURCE_INITIAL_PATRONS:-60}
-      SOURCE_INITIAL_ACTIVE: ${SOURCE_INITIAL_ACTIVE:-18}
+      SOURCE_MONGO_URI: ${SOURCE_MONGO_URI:-mongodb://${MONGO_ROOT_USER:-demo_admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/tapdata_casino_marketing?authSource=admin&replicaSet=rs1}
+      SOURCE_MONGO_DB: tapdata_casino_marketing
+      FEEDER_WRITE_ENABLED: ${FEEDER_WRITE_ENABLED:-false}
       FEEDER_INTERVAL_MS: ${FEEDER_INTERVAL_MS:-15000}
       FEEDER_DURATION_HOURS: ${FEEDER_DURATION_HOURS:-0}
-      FEEDER_TRANSITIONS_PER_TICK: ${FEEDER_TRANSITIONS_PER_TICK:-1}
       FEEDER_SESSION_UPDATES_PER_TICK: ${FEEDER_SESSION_UPDATES_PER_TICK:-1}
-      FEEDER_MAX_ACTIVE_PATRONS: ${FEEDER_MAX_ACTIVE_PATRONS:-350}
-      FEEDER_TABLE_CAP: ${FEEDER_TABLE_CAP:-25}
-      FEEDER_RISK_RATIO: ${FEEDER_RISK_RATIO:-0.02}
-      FEEDER_SEED: ${FEEDER_SEED:-20260915}
+      FEEDER_BET_INCREMENT: ${FEEDER_BET_INCREMENT:-500}
 
   # Optional wrapper around TapData's own Import API. The official TapData UI
   # Import button remains the recommended path; this service is opt-in.
@@ -151,9 +158,6 @@ services:
       context: .
       dockerfile: docker/tapdata-import.Dockerfile
     restart: "no"
-    depends_on:
-      tapdata:
-        condition: service_started
     environment:
       TAPDATA_IMPORT_MODE: ${TAPDATA_IMPORT_MODE:-manual}
       TAPDATA_IMPORT_ROOT: /opt/tapdata-demo/exports
@@ -185,3 +189,4 @@ services:
 
 volumes:
   demo_mongo_data:
+  demo_tapdata_data:

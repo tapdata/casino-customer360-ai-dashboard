@@ -1,0 +1,16 @@
+# Private cloud regression: published ports bind only to localhost and do not
+# collide with the existing MongoDB, TapData or AI panel. Set COMPOSE_PROFILES=
+# in .env.demo to reuse the existing TapData rather than start another JVM.
+services:
+  mongo:
+    mem_limit: 768m
+    ports: !override
+      - "127.0.0.1:37017:27017"
+  ai-panel:
+    mem_limit: 512m
+    ports: !override
+      - "127.0.0.1:33000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  source-feeder:
+    mem_limit: 256m

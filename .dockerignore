@@ -21,3 +21,6 @@ seed
 *.archive
 *.archive.gz
 *.dump
+
+云服务器备份与回归报告.md
+项目交接与部署状态.md

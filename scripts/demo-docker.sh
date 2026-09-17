@@ -6,6 +6,13 @@ COMPOSE_FILE="${ROOT_DIR}/docker-compose.demo.yml"
 ENV_FILE="${DEMO_ENV_FILE:-${ROOT_DIR}/.env.demo}"
 EXAMPLE_FILE="${ROOT_DIR}/.env.demo.example"
 
+# Preparation is entirely offline: no Docker startup or database writes.
+if [[ "${1:-}" == "prepare" ]]; then
+  node "${ROOT_DIR}/scripts/verify-source-backup.mjs" "${ROOT_DIR}/secrets/mongo-source"
+  node "${ROOT_DIR}/scripts/mongo-source-feeder.mjs" --dry-run
+  exit 0
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   printf 'Docker is required. Install Docker Desktop/Engine with Compose v2 first.\n' >&2
   exit 1
@@ -18,7 +25,9 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 compose() {
-  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+  local files=(-f "${COMPOSE_FILE}")
+  if [[ -n "${DEMO_COMPOSE_OVERRIDE:-}" ]]; then files+=(-f "${DEMO_COMPOSE_OVERRIDE}"); fi
+  docker compose --env-file "${ENV_FILE}" "${files[@]}" "$@"
 }
 
 usage() {
@@ -26,7 +35,8 @@ usage() {
 Usage: ./scripts/demo-docker.sh <command>
 
 Commands:
-  up       Build and start MongoDB, TapData, bootstrap and the AI panel
+  prepare  Verify private source backup and print an offline feeder plan
+  up       Restore source backup into empty bundled MongoDB and start services
   feeder   Start the optional Mongo-only source feeder
   all      Start the core stack and the Mongo-only source feeder
   once     Run one feeder tick and exit (does not keep a feeder running)
@@ -43,6 +53,15 @@ EOF
 }
 
 command="${1:-}"
+case "${command}" in
+  up|restart)
+    node "${ROOT_DIR}/scripts/verify-source-backup.mjs" "${ROOT_DIR}/secrets/mongo-source" >/dev/null
+    ;;
+  feeder|sources|all|once)
+    compose --profile feeder config --format json | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{if(String(JSON.parse(s).services["source-feeder"]?.environment?.FEEDER_WRITE_ENABLED)!=="true"){console.error("Data writes are disabled. Obtain approval before setting FEEDER_WRITE_ENABLED=true.");process.exit(1)}})'
+    node "${ROOT_DIR}/scripts/verify-source-backup.mjs" "${ROOT_DIR}/secrets/mongo-source" >/dev/null
+    ;;
+esac
 case "${command}" in
   up)
     compose config --quiet

@@ -1,3 +1,9 @@
+> **2026-09-17 deployment update:** The Docker kit and `npm run source:feed*`
+> commands now use `scripts/mongo-source-feeder.mjs` to update the restored
+> `tapdata_casino_marketing` database. Writes default to disabled. See
+> [DOCKER_DEMO_KIT.md](DOCKER_DEMO_KIT.md). The multi-source instructions below
+> describe the legacy script and are not part of the current deployment.
+
 # Real-Time Source Feeder
 
 This feeder continuously writes demo source data into the three upstream systems so TapData CDC can capture real changes and drive the AI panel.

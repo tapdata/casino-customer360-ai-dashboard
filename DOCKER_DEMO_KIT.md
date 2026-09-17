@@ -4,7 +4,7 @@ This branch adds a reproducible local container boundary for the Macau casino
 Customer 360 story:
 
 ```text
-MongoDB casino_source (source simulation)
+MongoDB tapdata_casino_marketing (restored source backup)
               │  CDC + cleansing + identity merge in TapData
               ▼
        MongoDB marketing_fdm (normalized FDM)
@@ -30,16 +30,19 @@ MongoDB casino_source (source simulation)
 
 The public repository does not redistribute proprietary TapData installers or
 licenses. Oracle/MSSQL/PostgreSQL are intentionally not required: the feeder
-writes source-shaped documents to `casino_source`, and TapData moves them
+updates existing profiles and sessions in `tapdata_casino_marketing`, and TapData moves them
 through the FDM and MDM databases. Java is already part of the TapData runtime
 image; no separate Java container is required for the panel.
 
 ## Quick start
 
-Prerequisites: Docker Desktop or Docker Engine with Compose v2.
+Prerequisites: Docker Desktop or Docker Engine with Compose v2, plus Node.js
+22.13+ for offline archive validation and the command wrapper.
 
 ```bash
 cp .env.demo.example .env.demo
+# place the private backup and manifests in secrets/mongo-source/
+./scripts/demo-docker.sh prepare
 # edit .env.demo: Mongo password, DeepSeek key, and TapData API/OAuth values
 ./scripts/demo-docker.sh up
 ```
@@ -48,7 +51,7 @@ Open the AI panel at `http://localhost:${AI_PANEL_PORT:-3000}` and TapData at
 `http://localhost:${TAPDATA_UI_PORT:-3030}`. The published API URL can point to
 the local TapData container or to an externally managed TapData instance.
 
-To also seed and continuously mutate the Mongo-only source data:
+After explicit approval, set `FEEDER_WRITE_ENABLED=true` in the private environment file to update restored source data:
 
 ```bash
 ./scripts/demo-docker.sh feeder
@@ -56,10 +59,31 @@ To also seed and continuously mutate the Mongo-only source data:
 ./scripts/demo-docker.sh all
 ```
 
-The default feeder interval is 15 seconds, with at most one customer
-transition and one session update per tick. It respects a 350 active-customer
-cap, a 25-person table cap, and a 2% risk ratio. Set
-`FEEDER_DURATION_HOURS` to stop automatically; `0` means no time limit.
+The default feeder interval is 15 seconds, updating one existing active session
+and its linked profile per tick in one transaction. No customers are seeded or
+inserted; identity, risk flags, tiers and active status are preserved. The default
+bet increment is 500. `FEEDER_DURATION_HOURS=0` means no time limit. Writes are
+disabled unless `FEEDER_WRITE_ENABLED=true` is explicitly configured.
+
+### Private source backup
+
+Before `up`, provide these ignored files in `secrets/mongo-source/`:
+
+- `tapdata_casino_marketing.archive.gz`
+- `archive.sha256`
+- `restore-manifest.json` (database, SHA-256, collection names and actual dump counts)
+
+Run `./scripts/demo-docker.sh prepare` to verify them entirely offline.
+`up` restores into the bundled MongoDB before the panel starts. Restoration
+checks the checksum and each collection count, preserves indexes through
+`mongorestore`, and records completion outside the source database. Repeated
+startup skips the same completed backup. An occupied, unmarked database or a
+partial restore fails closed; the script never drops collections. Its target is
+restricted to `mongo:27017/tapdata_casino_marketing`, not the original cloud DB.
+Backups are mounted read-only and never copied into images or Git.
+
+The legacy Oracle/MSSQL/PostgreSQL feeder is not invoked by this deployment;
+all `npm run source:feed*` commands now use the restored MongoDB source.
 
 ### Automatic TapData OAuth discovery
 
@@ -235,11 +259,32 @@ supply the explicit OAuth client pair.
 Private exports and database archives are excluded from Git and Docker build
 contexts. The importer runs with `--no-deps`, so preparing exports does not
 start TapData. Import and start routes must be configured for the target edition.
-Actual connection/task/API exports are not included in this checkout, so live
-import and end-to-end CDC/API validation remain pending.
+Private connection/task/API exports were located locally and are excluded from Git.
+The connection/task package passes offline validation (1 task, 2 connections,
+48 metadata records). Live import and end-to-end CDC/API validation remain pending.
 
 Verified locally: production Next.js build and 7 tests pass; Compose config
 validation and changed-module lint pass. An isolated MongoDB container became
 healthy with `rs1` primary. A one-shot feeder seeded 12 synthetic patrons with
 a configured active limit of 3 and retained that limit after its first tick.
 This does not verify the TapData image, live imports, or the full CDC pipeline.
+
+## Cloud regression (2026-09-17)
+
+The backup of `tapdata_casino_marketing` contains 23 collections and 128,368
+documents. It was restored and verified in a separate cloud Docker project.
+Default write blocking, a single feeder tick, unchanged identities/risk flags/
+collection counts, repeat-restore preservation, restart persistence and the
+AI panel HTTP 200 check all passed. The original cloud services remain running.
+No port cutover or live TapData import was performed.
+
+`docker-compose.cloud-test.yml` binds only localhost ports 37017 and 33000 and
+limits memory. Set `COMPOSE_PROFILES=` to omit the bundled TapData service when
+testing alongside an existing installation. The default example instead enables
+`bundled-tapdata` for a standalone deployment. TapData metadata is persisted in
+`demo_tapdata_data` at the official image's `/tapdata/data` path.
+
+The original server uses TapData Enterprise 4.21; the downloaded public image
+is the community distribution. Task/API compatibility and licensed features
+must be checked before replacing that existing installation. The current user
+instruction is to keep the original services running.

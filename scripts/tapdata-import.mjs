@@ -101,14 +101,21 @@ function parseTaskExport(filePath) {
     throw new Error("task export is not valid JSON or gzip JSON");
   }
 
-  const records = Array.isArray(parsed) ? parsed : [parsed];
-  const taskRecords = records.filter((record) => record && (record.type === "Task" || record.className === "Task" || record.taskId));
-  const connectionRecords = records.filter((record) => record && (record.type === "Connection" || record.className === "Connection" || record.connectionId));
-  const metadataRecords = records.filter((record) => record && (record.type === "MetadataInstance" || record.className === "MetadataInstance" || record.metadataInstanceId));
+  const records = (Array.isArray(parsed) ? parsed : [parsed]).map((record) => {
+    if (!record?.collectionName || record.json === undefined) return record;
+    const body = parseJsonValue(record.json);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error("invalid JSON payload in the TapData collection export");
+    }
+    return { ...body, exportCollection: record.collectionName };
+  });
+  const taskRecords = records.filter((record) => record && (record.exportCollection ? record.exportCollection === "Task" : record.type === "Task" || record.className === "Task" || record.taskId));
+  const connectionRecords = records.filter((record) => record && (record.exportCollection ? record.exportCollection === "Connections" : record.type === "Connection" || record.className === "Connection" || record.connectionId));
+  const metadataRecords = records.filter((record) => record && (record.exportCollection ? record.exportCollection === "MetadataInstances" : record.type === "MetadataInstance" || record.className === "MetadataInstance" || record.metadataInstanceId));
   if (taskRecords.length === 0) throw new Error("export contains no Task records; API module packages cannot be imported as tasks");
   const task = taskRecords[0] || {};
   const taskConfig = parseJsonValue(task.config ?? task.taskConfig ?? task.options);
-  const nodes = parseJsonValue(task.nodes ?? task.nodeList ?? task.nodeConfig);
+  const nodes = parseJsonValue(task.nodes ?? task.nodeList ?? task.nodeConfig ?? parseJsonValue(task.dag)?.nodes);
 
   const nodeNames = [];
   if (Array.isArray(nodes)) {
@@ -359,7 +366,7 @@ async function main() {
 
   log(`validated connection export ${manifest.connectionExport.fileName} (${manifest.connectionExport.sizeBytes} bytes)`);
   log(`validated task export ${manifest.taskExport.fileName} (${manifest.taskExport.sizeBytes} bytes)`);
-  log(`task records=${manifest.taskExport.summary.recordCount}, connections=${manifest.taskExport.summary.connectionCount}, metadataInstances=${manifest.taskExport.summary.metadataInstanceCount}`);
+  log(`task records=${manifest.taskExport.summary.recordCount}, connections=${manifest.taskExport.summary.connectionCount}, metadataInstances=${manifest.taskExport.summary.metadataInstanceCount}, tasks=${manifest.taskExport.summary.taskCount}`);
   log(`redacted manifest written to ${manifestPath}`);
 
   if (importMode !== "api") {

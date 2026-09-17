@@ -44,3 +44,18 @@ test('refuses to send credentials to an endpoint on another origin', () => {
   assert.match(result.stderr, /configured API origin/);
   assert.doesNotMatch(result.stdout + result.stderr, /test-secret/);
 });
+
+test('accepts the collectionName/json envelope from actual TapData task exports', () => {
+  const result = run(workbookProbe, [
+    { collectionName: 'Task', json: JSON.stringify({ name: 'Example', dag: { nodes: [] } }) },
+    { collectionName: 'Connections', json: JSON.stringify({ name: 'Source' }) },
+    { collectionName: 'MetadataInstances', json: '{"taskId":"linked-task"}' },
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /task records=3, connections=1, metadataInstances=1, tasks=1/);
+});
+test('rejects actual API module envelopes as task exports', () => {
+  const result = run(workbookProbe, [{ collectionName: 'Modules', json: '{"name":"Example API"}' }]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /no Task records/);
+});
