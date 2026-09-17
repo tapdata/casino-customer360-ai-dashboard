@@ -43,7 +43,7 @@ Commands:
   down     Stop containers (keeps named volumes)
   restart  Rebuild and recreate the core application services
   prepare-import  Validate export files and write a redacted import manifest
-  import   Optionally call the exact TapData import endpoints you configured
+  import   Automatically upload the task and API packages through TapData
   task-start  Optionally call the exact TapData task-start endpoint you configured
   status   Show container status
   logs     Follow logs (SERVICE=ai-panel or source-feeder narrows it)

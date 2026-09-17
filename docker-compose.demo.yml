@@ -150,8 +150,8 @@ services:
       FEEDER_SESSION_UPDATES_PER_TICK: ${FEEDER_SESSION_UPDATES_PER_TICK:-1}
       FEEDER_BET_INCREMENT: ${FEEDER_BET_INCREMENT:-500}
 
-  # Optional wrapper around TapData's own Import API. The official TapData UI
-  # Import button remains the recommended path; this service is opt-in.
+  # Optional wrapper around TapData 4.21's own Import API. It uploads the task
+  # and API module packages directly; the service is opt-in and runs once.
   tapdata-importer:
     profiles: [import]
     build:
@@ -163,9 +163,19 @@ services:
       TAPDATA_IMPORT_ROOT: /opt/tapdata-demo/exports
       TAPDATA_CONNECTION_EXPORT: ${TAPDATA_CONNECTION_EXPORT:-}
       TAPDATA_TASK_EXPORT: ${TAPDATA_TASK_EXPORT:-}
+      TAPDATA_API_EXPORT: ${TAPDATA_API_EXPORT:-}
       TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_IMPORT_API_BASE_URL: ${TAPDATA_IMPORT_API_BASE_URL:-http://tapdata:3030}
       TAPDATA_CONNECTION_IMPORT_PATH: ${TAPDATA_CONNECTION_IMPORT_PATH:-}
-      TAPDATA_TASK_IMPORT_PATH: ${TAPDATA_TASK_IMPORT_PATH:-}
+      TAPDATA_TASK_IMPORT_PATH: ${TAPDATA_TASK_IMPORT_PATH:-/api/Task/batch/import}
+      TAPDATA_API_IMPORT_PATH: ${TAPDATA_API_IMPORT_PATH:-/api/Modules/batch/import}
+      TAPDATA_TASK_LIST_PATH: ${TAPDATA_TASK_LIST_PATH:-/api/Task}
+      TAPDATA_API_LIST_PATH: ${TAPDATA_API_LIST_PATH:-/api/Modules}
+      TAPDATA_TASK_IMPORT_TYPE: ${TAPDATA_TASK_IMPORT_TYPE:-dataflow}
+      TAPDATA_API_IMPORT_TYPE: ${TAPDATA_API_IMPORT_TYPE:-Modules}
+      TAPDATA_TASK_IMPORT_MODE: ${TAPDATA_TASK_IMPORT_MODE:-import_as_copy}
+      TAPDATA_API_IMPORT_MODE: ${TAPDATA_API_IMPORT_MODE:-import_as_copy}
+      TAPDATA_IMPORT_LISTTAGS_JSON: ${TAPDATA_IMPORT_LISTTAGS_JSON:-[]}
       TAPDATA_SOURCE_MONGODB_URI: ${TAPDATA_SOURCE_MONGODB_URI:-}
       TAPDATA_IMPORT_URI_FIELD: ${TAPDATA_IMPORT_URI_FIELD:-}
       TAPDATA_IMPORT_TOKEN: ${TAPDATA_IMPORT_TOKEN:-}
@@ -181,7 +191,6 @@ services:
       TAPDATA_IMPORT_ALLOW_MISSING_URI: ${TAPDATA_IMPORT_ALLOW_MISSING_URI:-false}
       TAPDATA_IMPORT_STATE_DIR: /opt/tapdata-demo/import-state
       TAPDATA_IMPORT_CONNECTION_FILE_FIELD: ${TAPDATA_IMPORT_CONNECTION_FILE_FIELD:-connectionFile}
-      TAPDATA_IMPORT_TASK_FILE_FIELD: ${TAPDATA_IMPORT_TASK_FILE_FIELD:-taskFile}
     volumes:
       - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
       - ./runtime/tapdata-import:/opt/tapdata-demo/import-state

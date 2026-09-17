@@ -158,30 +158,29 @@ TapData UI/API. Keep these checks in the demo runbook:
 5. A small test mutation in each source is visible through CDC, the MDM target,
    and the corresponding API before the AI demo starts.
 
-### Official Import versus optional command-line automation
+### Direct task and API import automation
 
-The **Import** button in the TapData Data Transformation screen is the
-official and preferred path. It understands the export format of the running
-TapData edition and lets the operator review mappings before anything starts:
+The repository contains an opt-in importer at `scripts/tapdata-import.mjs`.
+For the TapData Enterprise 4.21 build used by this project it calls the same
+multipart endpoints as the browser UI, so no manual UI upload is required:
 
-1. Import `MongoDB_Source-20260915.xlsx` as the connection export.
-2. Import `TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz` as
-   the task export.
-3. Review connection names, source/target mappings, and join/write paths.
-4. Start the task only after the initial-load count and target collection look
-   correct.
+| Artifact | Endpoint | Multipart fields |
+| --- | --- | --- |
+| CDC task export | `POST /api/Task/batch/import` | `file`, `type=dataflow`, `importMode`, `listtags` |
+| API module export | `POST /api/Modules/batch/import` | `file`, `type=Modules`, `importMode`, `listtags` |
 
-The shared `module_batch-20260915.json.gz` file is a published-API module
-package (69 records/23 modules, `/api/v1`); it is **not** a CDC task export.
-Import it through the API/service import screen only when that screen is
-available in the selected TapData edition.
+The default mode is `import_as_copy`, which creates new task/API records and
+does not replace or start existing records. After both uploads the importer
+performs read-only checks against `GET /api/Task` and `GET /api/Modules`.
+`TAPDATA_IMPORT_AUTOSTART` remains false unless an operator explicitly
+configures the start endpoint.
 
-This repository also contains an **opt-in wrapper** for repeatable setup:
-`scripts/tapdata-import.mjs`. It validates the artifacts offline and can call
-the exact connection/task import endpoints supplied by the operator. It does
-not guess private TapData endpoints, rewrite credentials, overwrite existing
-tasks, or start tasks by default. This is deliberate: import routes and form
-field names vary between TapData editions.
+The supplied `module_batch-20260915.json.gz` is a published-API module package
+(69 records/23 modules, `/api/v1`); it must be sent to `/api/Modules/batch/import`
+and must not be treated as a CDC task export. The task package contains the
+task plus its embedded connection/metadata records. The optional XLSX
+connection export can still be uploaded first when the target edition exposes
+an approved connection-import route.
 
 ```bash
 # Put private exports in the local, ignored mount (do not commit them):
@@ -189,22 +188,26 @@ mkdir -p deploy/tapdata/exports/connections deploy/tapdata/exports/tasks
 cp /path/to/MongoDB_Source-20260915.xlsx deploy/tapdata/exports/connections/
 cp /path/to/TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz \
   deploy/tapdata/exports/tasks/
+cp /path/to/module_batch-20260915.json.gz deploy/tapdata/exports/
 
 # Offline validation + a redacted manifest; no TapData network call:
 ./scripts/demo-docker.sh prepare-import
 
-# Only after confirming the exact routes/body fields for this TapData build:
+# Direct task + API import through the TapData API (token stays in .env.demo):
 ./scripts/demo-docker.sh import
 # Optional, and only when an exact start route is configured:
 ./scripts/demo-docker.sh task-start
 ```
 
-Configure the exact routes and request fields in `.env.demo` (for example,
-`TAPDATA_CONNECTION_IMPORT_PATH`, `TAPDATA_TASK_IMPORT_PATH`, and the JSON
-form-field variables). Leave `TAPDATA_IMPORT_MODE=manual` and
-`TAPDATA_IMPORT_AUTOSTART=false` until an operator has reviewed the import
-result. A missing route causes the wrapper to fail closed rather than make a
-guess. The source MongoDB URI must be reachable **from the importer/TapData
+Set `TAPDATA_IMPORT_MODE=api` and `TAPDATA_IMPORT_TOKEN` in the private
+`.env.demo` file. The importer base is `TAPDATA_IMPORT_API_BASE_URL` (3030 for
+the Enterprise UI/API; it is separate from the published API gateway on 3080).
+The token is sent as the `access_token` query parameter, matching TapData
+4.21's web client; it is never written to the manifest or logs. The task/API
+paths, types and import modes are prefilled for 4.21 and can be overridden for
+another edition. Set `TAPDATA_CONNECTION_IMPORT_PATH` only when the target
+edition supports the separate XLSX connection endpoint.
+The source MongoDB URI must be reachable **from the importer/TapData
 container**; use `mongodb://mongo:27017/...` for the bundled service, not
 `127.0.0.1`.
 
@@ -225,19 +228,18 @@ TapData/API network exposure, and rotate OAuth/AI credentials.
 
 ## What is still required for a true one-command hand-off
 
-The current kit starts the containers and mounts reviewed exports, but two
-vendor-specific items still require confirmation from the target TapData
-edition:
+The current kit starts the containers and mounts reviewed exports. For the
+TapData Enterprise 4.21 build, `./scripts/demo-docker.sh import` also uploads
+the task and API package directly through `/api/Task/batch/import` and
+`/api/Modules/batch/import`, then performs read-only list checks. The only
+instance-specific item still required is an access token from the TapData
+login (stored in private `.env.demo` as `TAPDATA_IMPORT_TOKEN`). A connection
+XLSX route is optional because the task package carries embedded connection
+records; configure it only if the target edition requires a separate upload.
 
-1. Confirm the connection/task import routes and request fields if the
-   optional wrapper is to be used. The supplied
-   `module_batch-20260915.json.gz` contains 69 records covering 23 API modules
-   (all `/api/v1`); it is not a task export and is not auto-imported by this
-   repository.
-2. After the first TapData login, create the instance-specific OAuth client
-   and publish the services. Put the resulting client ID/secret (or a
-   reachable metadata URI for discovery) in `.env.demo`; credentials cannot be
-   generated generically because they belong to each TapData installation.
+The supplied `module_batch-20260915.json.gz` contains 69 records covering 23
+API modules (all `/api/v1`) and is imported as an API module package, never as
+a task export. A task is not started automatically.
 
 After those two items are supplied, the remaining setup is environment
 configuration only: `MONGO_ROOT_PASSWORD`, `DEEPSEEK_API_KEY`, TapData API
@@ -258,10 +260,11 @@ supply the explicit OAuth client pair.
 
 Private exports and database archives are excluded from Git and Docker build
 contexts. The importer runs with `--no-deps`, so preparing exports does not
-start TapData. Import and start routes must be configured for the target edition.
-Private connection/task/API exports were located locally and are excluded from Git.
-The connection/task package passes offline validation (1 task, 2 connections,
-48 metadata records). Live import and end-to-end CDC/API validation remain pending.
+start TapData. Private connection/task/API exports were located locally and
+are excluded from Git. The connection/task/API packages pass offline
+validation (1 task, 2 connections, 48 task metadata records, 23 API modules).
+Live import requires a valid TapData access token and is intentionally a
+separate command.
 
 Verified locally: production Next.js build and 7 tests pass; Compose config
 validation and changed-module lint pass. An isolated MongoDB container became

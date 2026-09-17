@@ -48,27 +48,33 @@ fan out to two targets in that task. A Join task produces one target collection.
 
 ### Which import path should I use?
 
-Use TapData's **Import** button as the default. Import the connection export
-first (`MongoDB_Source-20260915.xlsx`), then the CDC task export
-(`TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz`). Review the
-mapping and initial-load count in the UI before starting the task. The
-`module_batch-20260915.json.gz` artifact is a published-API module package,
-not a CDC task package; import it only through the API/service import screen
-when the current TapData edition supports that package.
+For TapData Enterprise 4.21, `scripts/tapdata-import.mjs` calls the same
+multipart endpoints used by the web UI, so the task and API packages can be
+imported without manual uploads:
+
+* `POST /api/Task/batch/import` with `type=dataflow`;
+* `POST /api/Modules/batch/import` with `type=Modules`.
+
+Both uploads default to `import_as_copy`; the importer then checks
+`GET /api/Task` and `GET /api/Modules`. The optional XLSX connection export can
+be uploaded first when the target edition exposes a configured connection
+endpoint. A task is never started unless `TAPDATA_IMPORT_AUTOSTART=true` and a
+start route are explicitly configured.
 
 For a repeatable environment, the repository has an optional wrapper:
 
 ```bash
 ./scripts/demo-docker.sh prepare-import  # offline validation, redacted manifest
-./scripts/demo-docker.sh import          # only with exact routes configured
+./scripts/demo-docker.sh import          # direct task + API import for 4.21
 ./scripts/demo-docker.sh task-start     # only with exact start route configured
 ```
 
-The wrapper is fail-closed and does not guess private endpoints or start or
-overwrite tasks automatically. Set the exact `TAPDATA_*_IMPORT_PATH` and
-request-field variables in `.env.demo` only after confirming them in the
-target TapData build. Keep `TAPDATA_IMPORT_AUTOSTART=false` until the first
-import has been reviewed. For the bundled Mongo service, a container must use
+The wrapper sends `TAPDATA_IMPORT_TOKEN` as the `access_token` query parameter,
+matching TapData 4.21's browser client. Set
+`TAPDATA_IMPORT_API_BASE_URL=http://tapdata:3030` for the Enterprise UI/API;
+this is separate from the published API gateway on 3080. Keep the token only
+in private `.env.demo`/deployment secrets; it is excluded from the redacted
+manifest and logs. For the bundled Mongo service, a container must use
 `mongodb://mongo:27017/...`; `127.0.0.1` points back to that container itself.
 
 On startup, the one-shot `bootstrap` service records the selected TapData image,
@@ -76,11 +82,8 @@ API paths, export mount, and credential-presence flags in MongoDB. It does not
 persist client secrets or access tokens unless `TAPDATA_STORE_CREDENTIALS=true`
 is explicitly set for a private environment.
 
-TapData export/import files are edition and version dependent. The
+TapData export/import files remain edition and version dependent. The
 `module_batch-20260915.json.gz` package currently contains 69 records for 23
-API modules, all with `/api/v1` paths. It is mounted for hand-off but is not
-automatically imported: this package is not a task export, and TapData has no
-stable cross-edition import endpoint that the public kit can safely assume.
-If an export cannot be imported directly, use the TapData UI/API for that
-release rather than editing the artifact by hand. The public kit remains
-usable with an external TapData deployment by changing `TAPDATA_*` variables.
+API modules, all with `/api/v1` paths. If a different TapData release changes
+the routes or multipart fields, override the `TAPDATA_*` importer variables or
+fall back to that release's documented UI/API.
