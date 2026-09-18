@@ -55,15 +55,22 @@ ssh -i ~/Downloads/skeet-20260818.pem root@47.119.130.230
 
 新的自动化程序必须把 TapData 作为外部依赖，不能依赖本机旧版 API Server，也不能把凭据写入导出文件或日志。
 
-## 继续执行前必须确认
+## 已确认的业务约束
 
-1. **TapData 端点和认证**：需要完整的管理端 URL、API Server URL、TapData 版本/版本类型，以及 API Token 或明确的登录认证方式。仅提供 `3030` 前端地址和一个 API 端口不足以执行自动导入。
-2. **MongoDB 语义**：需要完整 MongoDB URI 或 host、port、username、password、authSource、replicaSet、directConnection、database。必须确认是使用对方已有的 23 个集合，还是先把私有备份恢复到空库。
-3. **CDC 范围**：当前样例任务主要是 `patron_table_sessions`，不等于 23 个集合的完整同步。必须选择单任务、一个覆盖 23 个集合的任务，或 23 个独立任务，并提供 Target MongoDB 信息。
-4. **API 范围**：当前样例 API 原始记录为 23 条，历史管理端有 20 条进入 `active` 列表，另外 3 条必须在新企业版中核对后再承诺全部发布。
-5. **启动策略**：确认导入并健康检查通过后是否自动启动 CDC。推荐默认先导入、检查，再按开关启动。
-6. **重复执行策略**：推荐按稳定名称或外部标识更新已有对象，避免每次生成 `MDM_import...` 重复连接和模块；默认不删除旧对象、不覆盖已有数据。
-7. **网络位置**：如果对方 MongoDB 只监听 `127.0.0.1`，本地或云端导入程序无法直接访问，需要在同机执行或建立 SSH 隧道。
+1. 对方提供的是空 MongoDB；恢复到固定源库 `tapdata_casino_marketing`，使用之前定义的数据库名和 23 个集合。
+2. 只导入现有的那个 CDC 单任务：`TapData_CDC_Patron_Table_Sessions_To_MongoDB`。已检查导出文件，这个单任务的 DAG 本身包含 23 个 Source→MDM 集合映射，不需要拆成 23 个任务。
+3. Target 连接必须指向 MDM 数据库，当前约定名称为 `marketing_mdm`。CDC 数据落到 MDM 后，API 才能从该库发布。
+4. 自动化程序必须先确认 MDM 中 23 个 API 目标集合已经存在且有数据，再发布 API。
+5. 重复执行按同名对象自动更新任务和 API，不生成重复对象；默认不删除不同名对象。
+
+## 仍需提供或确认
+
+1. **TapData 端点和认证**：需要完整管理端 URL、API Server URL、TapData 版本/版本类型，以及 API Token 或明确的登录认证方式。仅提供 `3030` 前端地址和一个 API 端口不足以执行自动导入。
+2. **MongoDB 连接参数**：需要 Source 和 MDM Target 的完整 URI，或 host、port、username、password、authSource、replicaSet、directConnection 等字段。密码不单独写入聊天或文档。
+3. **启动策略**：是否在 MDM 23 个集合验证和 API 发布后自动启动 CDC；未确认前保持 `AUTO_START_CDC=false`。
+4. **网络位置**：如果对方 MongoDB 只监听 `127.0.0.1`，导入程序需要在同机执行或使用 SSH 隧道。
+
+当前 API 样例包原始包含 23 个模块；历史管理端有 20 个进入 `active` 列表，另外 3 个必须在新企业版中核对后才能报告为发布成功。
 
 ## 推荐的安全执行顺序
 
