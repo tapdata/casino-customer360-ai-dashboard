@@ -40,11 +40,15 @@ fan out to two targets in that task. A Join task produces one target collection.
 ## Import order
 
 1. Install or start TapData and activate it with the operator-provided license.
-2. Create/verify the source and target connections. Do not commit credentials.
-3. Import connections (if your edition supports connection export).
-4. Import/start the one-to-one CDC tasks and confirm initial-load counts.
-5. Import/start the two Join tasks and validate the join keys and flat write
-   paths against the target schema.
+2. Restore the 23 source collections into the fixed `tapdata_casino_marketing`
+   database, or verify that the supplied empty MongoDB is ready for restore.
+3. Create/verify the source and `marketing_mdm` target connections. Do not
+   commit credentials.
+4. Import the existing `TapData_CDC_Patron_Table_Sessions_To_MongoDB` task.
+   The task export already contains all 23 Source→MDM collection mappings; do
+   not split it into 23 tasks.
+5. Start the task and wait for all 23 MDM collections to exist and contain
+   data. The importer must stop before API publication if this check fails.
 6. Import/publish the API services. Confirm the actual API base URL, version
    (`v1`, `v2`, etc.), and service names before putting them in `.env.demo`.
 7. Use `./scripts/demo-docker.sh up` to run the AI panel against those published APIs.
@@ -61,8 +65,16 @@ imported without manual uploads:
 Both uploads default to `import_as_copy`; the importer then checks
 `GET /api/Task` and `GET /api/Modules`. The optional XLSX connection export can
 be uploaded first when the target edition exposes a configured connection
-endpoint. A task is never started unless `TAPDATA_IMPORT_AUTOSTART=true` and a
+endpoint. With post-processing enabled, the importer patches the Source and
+`marketing_mdm` Target URIs, starts the single CDC task when configured, waits
+for all 23 MDM collections to contain data, and only then marks API modules
+active. A task is never started unless `TAPDATA_IMPORT_AUTOSTART=true` and a
 start route are explicitly configured.
+
+Repeated runs must reconcile by the exact task/API name. Do not create
+`MDM_import...` copies. The exact same-name update route or import mode is
+TapData-edition-specific and must be confirmed during preflight before the
+first external deployment.
 
 For a repeatable environment, the repository has an optional wrapper:
 

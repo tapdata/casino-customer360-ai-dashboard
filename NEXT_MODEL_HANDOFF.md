@@ -39,6 +39,8 @@ ssh -i ~/Downloads/skeet-20260818.pem root@47.119.130.230
 - `38f444e`：自动导入 TapData 任务和 API 模块。
 - `f600474`：恢复私有源库并完成云端回归准备。
 
+当前工作区还加入了 MDM 发布闸门：配置 `TAPDATA_IMPORT_VERIFY_MDM_DATA=true` 后，导入器会等待目标 `marketing_mdm` 中 API 包声明的 23 个集合都存在且至少有一条数据，然后才把 API 模块标记为 active。连接 URI 的数据库名也可用 `TAPDATA_IMPORT_SOURCE_MONGODB_DB` 和 `TAPDATA_IMPORT_TARGET_MONGODB_DB` 固定校验。
+
 历史 Docker 回归曾验证：任务导入、连接健康、初始同步、CDC、API 发布和 `/api/v1/...` 调用均可工作。详细历史结果见 [云服务器备份与回归报告.md](云服务器备份与回归报告.md)。
 
 ## 当前方案已经改变

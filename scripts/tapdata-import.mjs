@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { MongoClient } from "mongodb";
 
 const env = process.env;
 
@@ -191,12 +192,16 @@ function parseModuleExport(filePath) {
   const names = moduleRecords
     .map((record) => record.name ?? record.moduleName ?? record.apiName)
     .filter((name) => typeof name === "string" && name.length < 120);
+  const tableNames = moduleRecords
+    .map((record) => record.tableName ?? record.table ?? (record.exportCollection === "Modules" ? undefined : record.collectionName))
+    .filter((name) => typeof name === "string" && name.length < 120);
   return {
     recordCount: records.length,
     moduleCount: moduleRecords.length,
     connectionCount: connectionRecords.length,
     metadataInstanceCount: metadataRecords.length,
-    moduleNames: [...new Set(names)].slice(0, 20),
+    moduleNames: [...new Set(names)],
+    moduleTableNames: [...new Set(tableNames)],
   };
 }
 
@@ -280,6 +285,37 @@ function parseFormFields(raw, label) {
   } catch {
     throw new Error(`${label} must be a JSON object`);
   }
+}
+
+function parseMongoDatabase(uri, label) {
+  if (!uri) throw new Error(`${label} MongoDB URI is required`);
+  let parsed;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw new Error(`${label} MongoDB URI is invalid`);
+  }
+  const database = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!database) throw new Error(`${label} MongoDB URI must include a database name`);
+  return database;
+}
+
+function assertMongoDatabase(uri, expected, label) {
+  if (!expected) return;
+  const actual = parseMongoDatabase(uri, label);
+  if (actual !== expected) {
+    throw new Error(`${label} MongoDB database must be ${expected}, received ${actual}`);
+  }
+}
+
+function parseJsonArray(raw, label) {
+  if (!raw) return undefined;
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { throw new Error(`${label} must be a JSON array`); }
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string" || !value)) {
+    throw new Error(`${label} must be a JSON array of collection names`);
+  }
+  return [...new Set(parsed)];
 }
 
 function sleep(milliseconds) {
@@ -470,6 +506,50 @@ function postProcessUri(name, uri, connection) {
   };
 }
 
+async function inspectMdmCollections(uri, collectionNames) {
+  const database = parseMongoDatabase(uri, "Target");
+  const client = new MongoClient(uri, {
+    serverSelectionTimeoutMS: timeoutMs,
+    connectTimeoutMS: timeoutMs,
+  });
+  try {
+    await client.connect();
+    const db = client.db(database);
+    const available = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((item) => item.name));
+    const missing = collectionNames.filter((name) => !available.has(name));
+    const empty = [];
+    for (const name of collectionNames) {
+      if (missing.includes(name)) continue;
+      const document = await db.collection(name).findOne({}, { projection: { _id: 1 } });
+      if (!document) empty.push(name);
+    }
+    return { database, missing, empty };
+  } finally {
+    await client.close();
+  }
+}
+
+async function waitForMdmCollections(uri, collectionNames) {
+  const attempts = asPositiveInt(env.TAPDATA_IMPORT_MDM_WAIT_ATTEMPTS, 60);
+  const intervalMs = asPositiveInt(env.TAPDATA_IMPORT_MDM_WAIT_INTERVAL_MS, 5_000);
+  let last = { missing: collectionNames, empty: [] };
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      last = await inspectMdmCollections(uri, collectionNames);
+      if (last.missing.length === 0 && last.empty.length === 0) {
+        log(`verified MDM database ${last.database}: ${collectionNames.length} collections contain data`);
+        return;
+      }
+      log(`waiting for MDM data (${attempt}/${attempts}): missing=${last.missing.length}, empty=${last.empty.length}`);
+    } catch (error) {
+      if (attempt === attempts) throw new Error(`MDM data verification failed: ${error instanceof Error ? error.message : String(error)}`);
+      log(`waiting for MDM MongoDB (${attempt}/${attempts}); credentials and URI are not printed`);
+    }
+    if (attempt < attempts) await sleep(intervalMs);
+  }
+  throw new Error(`MDM database is not ready: missing=${last.missing.join(",")}, empty=${last.empty.join(",")}`);
+}
+
 async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
   const connectionListPath = env.TAPDATA_CONNECTION_LIST_PATH || "/api/Connections";
   const connectionPatchTemplate = env.TAPDATA_CONNECTION_PATCH_PATH || "/api/Connections/{id}";
@@ -482,6 +562,8 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
   const sourceUri = env.TAPDATA_IMPORT_SOURCE_MONGODB_URI || env.TAPDATA_SOURCE_MONGODB_URI;
   const targetUri = env.TAPDATA_IMPORT_TARGET_MONGODB_URI;
   if (!source || !target) throw new Error("post-processing requires the imported MongoDB_Source and MDM connections");
+  assertMongoDatabase(sourceUri, env.TAPDATA_IMPORT_SOURCE_MONGODB_DB, "Source");
+  assertMongoDatabase(targetUri, env.TAPDATA_IMPORT_TARGET_MONGODB_DB, "Target");
 
   const patchedIds = new Set();
   for (const [connection, uri] of [[source, sourceUri], [target, targetUri]]) {
@@ -496,9 +578,14 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
   if (!task?.id) throw new Error("post-processing could not resolve the imported task id");
 
   const apiItems = listItems(apiList, "API module");
-  const apiNames = new Set(parseModuleExport(apiPath).moduleNames);
+  const apiSummary = parseModuleExport(apiPath);
+  const apiNames = new Set(apiSummary.moduleNames);
   const importedModules = apiItems.filter((item) => apiNames.has(item.name));
   if (importedModules.length === 0) throw new Error("post-processing could not resolve imported API modules");
+  const missingModules = [...apiNames].filter((name) => !importedModules.some((item) => item.name === name));
+  if (missingModules.length > 0 && !asBool(env.TAPDATA_IMPORT_ALLOW_PARTIAL_API)) {
+    throw new Error(`post-processing could not resolve all API modules (missing=${missingModules.join(",")})`);
+  }
   for (const module of importedModules) {
     if (module.connectionId && !patchedIds.has(module.connectionId)) {
       const moduleConnection = connections.find((connection) => connection.id === module.connectionId);
@@ -507,10 +594,6 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
       await request(path, { method: "PATCH", body: postProcessUri(moduleConnection.name, targetUri, moduleConnection) });
       patchedIds.add(moduleConnection.id);
     }
-    await request(modulePatchPath, {
-      method: "PATCH",
-      body: { id: module.id, status: "active", tableName: module.tableName },
-    });
   }
 
   // Connection tests are asynchronous in TapData. Poll until every patched
@@ -524,7 +607,6 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
     if (statuses.every((status) => ["ready", "normal", "active"].includes(status))) break;
     if (attempt === 11) throw new Error(`post-processing connection test did not become ready (statuses=${statuses.join(",")})`);
   }
-  log(`post-processing verified ${patchedIds.size} MongoDB connection(s) and published ${importedModules.length} API module(s)`);
 
   if (asBool(env.TAPDATA_IMPORT_AUTOSTART)) {
     const template = env.TAPDATA_TASK_START_PATH_TEMPLATE;
@@ -534,6 +616,21 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
     const result = await request(path, { method: env.TAPDATA_TASK_START_METHOD || "POST", body: startBody });
     log(`task start accepted after post-processing (HTTP ${result.status})`);
   }
+
+  if (asBool(env.TAPDATA_IMPORT_VERIFY_MDM_DATA)) {
+    if (!targetUri) throw new Error("TAPDATA_IMPORT_VERIFY_MDM_DATA=true requires TAPDATA_IMPORT_TARGET_MONGODB_URI");
+    const expectedCollections = parseJsonArray(env.TAPDATA_IMPORT_MDM_COLLECTIONS_JSON, "TAPDATA_IMPORT_MDM_COLLECTIONS_JSON") || apiSummary.moduleTableNames;
+    if (expectedCollections.length === 0) throw new Error("MDM data verification requires expected collection names");
+    await waitForMdmCollections(targetUri, expectedCollections);
+  }
+
+  for (const module of importedModules) {
+    await request(modulePatchPath, {
+      method: "PATCH",
+      body: { id: module.id, status: "active", tableName: module.tableName },
+    });
+  }
+  log(`post-processing verified ${patchedIds.size} MongoDB connection(s) and published ${importedModules.length} API module(s)`);
 }
 
 async function startTask() {
