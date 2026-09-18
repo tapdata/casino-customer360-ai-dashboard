@@ -2,7 +2,10 @@
 
 This directory is the hand-off boundary between the public demo repository and
 an installed TapData instance. It intentionally does **not** contain a TapData
-installer, license, OAuth secret, or a fabricated export format.
+installer, API Server binary, license, OAuth secret, or a fabricated export
+format. The bundled Docker profile expects the authorized API Server JAR at
+`secrets/tapdata-api/apiserver.jar`; it runs that artifact in a separate
+`tapdata-api` container on port 3080 and never depends on an old host process.
 
 ## What to place here
 

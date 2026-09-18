@@ -45,13 +45,52 @@ services:
     image: ${TAPDATA_IMAGE:-ghcr.io/tapdata/tapdata:latest}
     privileged: true
     restart: unless-stopped
+    environment:
+      # Keep the manager access code identical to the API Server's code. The
+      # default is the community image's documented startup default; private
+      # deployments should set TAPDATA_ACCESS_CODE explicitly.
+      ACCESS_CODE: ${TAPDATA_ACCESS_CODE:-3324cfdf-7d3e-4792-bd32-571638d4562f}
     ports:
       - "${TAPDATA_UI_PORT:-3030}:3030"
-      - "${TAPDATA_API_PORT:-3080}:3080"
     volumes:
       - demo_tapdata_data:/tapdata/data
       - ./deploy/tapdata/exports:/opt/tapdata-demo/exports:ro
       - ./secrets:/opt/tapdata-demo/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3030/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # The public community image does not ship TapData's published-API Server.
+  # This separate service makes the dependency explicit and persistent: an
+  # operator supplies an authorized Enterprise API Server JAR as a read-only
+  # artifact, and Compose starts it on every deployment.
+  tapdata-api:
+    profiles: [bundled-tapdata]
+    image: ${TAPDATA_API_SERVER_IMAGE:-ghcr.io/tapdata/tapdata:latest}
+    restart: unless-stopped
+    depends_on:
+      tapdata:
+        condition: service_healthy
+    environment:
+      TAPDATA_TM_BASE_URLS: ${TAPDATA_TM_BASE_URLS:-http://tapdata:3030}
+      TAPDATA_ACCESS_CODE: ${TAPDATA_ACCESS_CODE:-3324cfdf-7d3e-4792-bd32-571638d4562f}
+      TAPDATA_WORK_DIR: /var/lib/tapdata-api
+      # The bundled PDK uses CGLIB on Java 17; these opens are required for
+      # the connector classloader to initialize in the standalone API service.
+      JAVA_TOOL_OPTIONS: ${TAPDATA_API_JAVA_TOOL_OPTIONS:---add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED}
+    ports:
+      - "${TAPDATA_API_PORT:-3080}:3080"
+    volumes:
+      - ${TAPDATA_API_SERVER_JAR:-./secrets/tapdata-api/apiserver.jar}:/opt/tapdata-api/apiserver.jar:ro
+      - demo_tapdata_api_work:/var/lib/tapdata-api
+    command:
+      - sh
+      - -ec
+      - |
+        test -s /opt/tapdata-api/apiserver.jar
+        exec java -Dserver.port=3080 -jar /opt/tapdata-api/apiserver.jar
 
   # Records the selected image/API/export metadata after Mongo is ready. It
   # deliberately stores only presence flags for credentials, never secrets.
@@ -68,7 +107,7 @@ services:
       MONGO_BOOTSTRAP_DB: ${MONGO_BOOTSTRAP_DB:-marketing_demo}
       MONGO_BOOTSTRAP_COLLECTION: ${MONGO_BOOTSTRAP_COLLECTION:-tapdata_runtime_config}
       TAPDATA_IMAGE: ${TAPDATA_IMAGE}
-      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata-api:3080}
       TAPDATA_TOKEN_URL: ${TAPDATA_TOKEN_URL:-http://tapdata:3030/oauth/token}
       TAPDATA_FIND_PATH_TEMPLATE: ${TAPDATA_FIND_PATH_TEMPLATE:-/api/v1/{collection}/find}
       TAPDATA_TOKEN_AUTH_METHOD: ${TAPDATA_TOKEN_AUTH_METHOD:-client_secret_post}
@@ -101,7 +140,7 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata-api:3080}
       TAPDATA_FIND_PATH_TEMPLATE: ${TAPDATA_FIND_PATH_TEMPLATE:-/api/v1/{collection}/find}
       TAPDATA_TOKEN_URL: ${TAPDATA_TOKEN_URL:-http://tapdata:3030/oauth/token}
       TAPDATA_CLIENT_ID: ${TAPDATA_CLIENT_ID:-}
@@ -109,7 +148,10 @@ services:
       TAPDATA_TOKEN_AUTH_METHOD: ${TAPDATA_TOKEN_AUTH_METHOD:-client_secret_post}
       TAPDATA_ACCESS_TOKEN: ${TAPDATA_ACCESS_TOKEN:-}
       TAPDATA_COLLECTION_MAP: ${TAPDATA_COLLECTION_MAP:-}
-      TAPDATA_METADATA_URI: ${TAPDATA_METADATA_URI:-}
+      # The bundled TapData image keeps its manager metadata Mongo inside the
+      # tapdata container. This URI is only the default for the bundled profile;
+      # external deployments should override it with their metadata endpoint.
+      TAPDATA_METADATA_URI: ${TAPDATA_METADATA_URI:-mongodb://tapdata:27017/tapdata?directConnection=true}
       TAPDATA_MONGO_URI: ${TAPDATA_MONGO_URI:-}
       TAPDATA_METADATA_DB: ${TAPDATA_METADATA_DB:-tapdata}
       TAPDATA_METADATA_COLLECTION: ${TAPDATA_METADATA_COLLECTION:-Application}
@@ -164,7 +206,7 @@ services:
       TAPDATA_CONNECTION_EXPORT: ${TAPDATA_CONNECTION_EXPORT:-}
       TAPDATA_TASK_EXPORT: ${TAPDATA_TASK_EXPORT:-}
       TAPDATA_API_EXPORT: ${TAPDATA_API_EXPORT:-}
-      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata:3080}
+      TAPDATA_API_BASE_URL: ${TAPDATA_API_BASE_URL:-http://tapdata-api:3080}
       TAPDATA_IMPORT_API_BASE_URL: ${TAPDATA_IMPORT_API_BASE_URL:-http://tapdata:3030}
       TAPDATA_CONNECTION_IMPORT_PATH: ${TAPDATA_CONNECTION_IMPORT_PATH:-}
       TAPDATA_TASK_IMPORT_PATH: ${TAPDATA_TASK_IMPORT_PATH:-/api/Task/batch/import}
@@ -207,3 +249,4 @@ services:
 volumes:
   demo_mongo_data:
   demo_tapdata_data:
+  demo_tapdata_api_work:

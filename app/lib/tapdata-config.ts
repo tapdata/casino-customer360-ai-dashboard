@@ -33,12 +33,12 @@ function numberEnv(name: string, fallback: number) {
 
 function parseFilter() {
   const raw = textEnv("TAPDATA_METADATA_FILTER_JSON");
-  if (!raw) return { name: "Data Explorer" };
+  if (!raw) return { clientName: "Data Explorer" };
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : { name: "Data Explorer" };
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : { clientName: "Data Explorer" };
   } catch {
-    return { name: "Data Explorer" };
+    return { clientName: "Data Explorer" };
   }
 }
 
@@ -61,7 +61,7 @@ function configKey() {
     textEnv("TAPDATA_METADATA_URI") || textEnv("TAPDATA_MONGO_URI") || "",
     textEnv("TAPDATA_METADATA_DB") || "tapdata",
     textEnv("TAPDATA_METADATA_COLLECTION") || "Application",
-    textEnv("TAPDATA_METADATA_FILTER_JSON") || '{"name":"Data Explorer"}',
+    textEnv("TAPDATA_METADATA_FILTER_JSON") || '{"clientName":"Data Explorer"}',
     textEnv("TAPDATA_METADATA_CLIENT_ID_PATH") || "clientId",
     textEnv("TAPDATA_METADATA_CLIENT_SECRET_PATH") || "clientSecret",
     textEnv("TAPDATA_TOKEN_AUTH_METHOD") || "client_secret_post",

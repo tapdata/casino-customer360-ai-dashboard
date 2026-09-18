@@ -19,7 +19,8 @@ MongoDB tapdata_casino_marketing (restored source backup)
 ## What is included
 
 - `docker-compose.demo.yml`: one authenticated MongoDB single-node replica set (`rs1`) with separate source/FDM/MDM
-  databases, TapData, the AI panel, and an optional Mongo-only source feeder.
+  databases, TapData, its separately managed published-API Server, the AI panel,
+  and an optional Mongo-only source feeder.
 - `docker/ai-panel.Dockerfile`: production Next.js image; secrets are runtime
   environment variables, never build-time source files.
 - `.env.demo.example`: redacted configuration template.
@@ -28,11 +29,13 @@ MongoDB tapdata_casino_marketing (restored source backup)
 - `deploy/tapdata/`: the versioned location for TapData-generated exports and
   the import checklist.
 
-The public repository does not redistribute proprietary TapData installers or
-licenses. Oracle/MSSQL/PostgreSQL are intentionally not required: the feeder
+The public repository does not redistribute proprietary TapData installers,
+API Server binaries, or licenses. Oracle/MSSQL/PostgreSQL are intentionally not required: the feeder
 updates existing profiles and sessions in `tapdata_casino_marketing`, and TapData moves them
 through the FDM and MDM databases. Java is already part of the TapData runtime
-image; no separate Java container is required for the panel.
+image for the manager and Agent. The published-API Server runs as a separate
+Java container and requires an operator-supplied, authorized Enterprise API
+Server JAR.
 
 ## Quick start
 
@@ -42,14 +45,44 @@ Prerequisites: Docker Desktop or Docker Engine with Compose v2, plus Node.js
 ```bash
 cp .env.demo.example .env.demo
 # place the private backup and manifests in secrets/mongo-source/
+# place the authorized Enterprise API Server JAR at
+# secrets/tapdata-api/apiserver.jar (or set TAPDATA_API_SERVER_JAR)
 ./scripts/demo-docker.sh prepare
 # edit .env.demo: Mongo password, DeepSeek key, and TapData API/OAuth values
 ./scripts/demo-docker.sh up
 ```
 
 Open the AI panel at `http://localhost:${AI_PANEL_PORT:-3000}` and TapData at
-`http://localhost:${TAPDATA_UI_PORT:-3030}`. The published API URL can point to
-the local TapData container or to an externally managed TapData instance.
+`http://localhost:${TAPDATA_UI_PORT:-3030}`. The published API is provided by
+the local `tapdata-api` container on port `3080`.
+
+### Independent 3080 API Server
+
+The public `ghcr.io/tapdata/tapdata:latest` image does not contain or start the
+TapData published-API Server. The Compose stack therefore starts a separate
+`tapdata-api` service on every deployment:
+
+```text
+tapdata (community image): 3030 manager + Agent
+tapdata-api (Java image):  3080 published APIs
+```
+
+The operator must provide the licensed API Server artifact once, outside Git:
+
+```bash
+mkdir -p secrets/tapdata-api
+cp /path/to/authorized/apiserver-java-1.0.0-SNAPSHOT-exec.jar \
+  secrets/tapdata-api/apiserver.jar
+```
+
+`./scripts/demo-docker.sh up` fails before starting containers when this file
+is missing. The API Server receives `TAPDATA_TM_BASE_URLS=http://tapdata:3030`
+and the same `TAPDATA_ACCESS_CODE` as the manager, then polls the manager's API
+definition. It does not connect to, or require, a separately running old
+TapData API or engine process. The JAR is mounted read-only and the service is
+restarted by Compose with the rest of the stack. For an externally managed
+TapData instance, disable the bundled profile and set the external `TAPDATA_*`
+URLs instead.
 
 After explicit approval, set `FEEDER_WRITE_ENABLED=true` in the private environment file to update restored source data:
 
@@ -94,7 +127,7 @@ in the `tapdata.Application` collection; the default lookup is:
 ```text
 database:   tapdata
 collection: Application
-filter:     { "name": "Data Explorer" }
+filter:     { "clientName": "Data Explorer" }
 fields:     clientId, clientSecret
 ```
 
@@ -212,10 +245,11 @@ imported task using `TAPDATA_TASK_START_PATH_TEMPLATE`, for example:
 /api/Task/batchStart?taskIds={taskId}
 ```
 
-The URIs and import token remain private environment variables. The public
-community image still does not include a 3080 API Server process; provide an
-authorized API Server component or an external TapData API gateway before
-calling the published `/api/v1/...` routes.
+The URIs and import token remain private environment variables. In the bundled
+profile, the separate `tapdata-api` service supplies 3080 from the authorized
+JAR described above; it is not an old host API or engine process. For an
+external deployment, point `TAPDATA_API_BASE_URL` at that deployment's own
+published API gateway.
 
 Set `TAPDATA_IMPORT_MODE=api` and `TAPDATA_IMPORT_TOKEN` in the private
 `.env.demo` file. The importer base is `TAPDATA_IMPORT_API_BASE_URL` (3030 for
@@ -249,17 +283,18 @@ TapData/API network exposure, and rotate OAuth/AI credentials.
 The current kit starts the containers and mounts reviewed exports. For the
 TapData Enterprise 4.21 build, `./scripts/demo-docker.sh import` also uploads
 the task and API package directly through `/api/Task/batch/import` and
-`/api/Modules/batch/import`, then performs read-only list checks. The only
-instance-specific item still required is an access token from the TapData
-login (stored in private `.env.demo` as `TAPDATA_IMPORT_TOKEN`). A connection
-XLSX route is optional because the task package carries embedded connection
-records; configure it only if the target edition requires a separate upload.
+`/api/Modules/batch/import`, then performs read-only list checks. The
+instance-specific items are the authorized API Server JAR and an access token
+from the TapData login (stored in private `.env.demo` as
+`TAPDATA_IMPORT_TOKEN`). A connection XLSX route is optional because the task
+package carries embedded connection records; configure it only if the target
+edition requires a separate upload.
 
 The supplied `module_batch-20260915.json.gz` contains 69 records covering 23
 API modules (all `/api/v1`) and is imported as an API module package, never as
 a task export. A task is not started automatically.
 
-After those two items are supplied, the remaining setup is environment
+After those items are supplied, the remaining setup is environment
 configuration only: `MONGO_ROOT_PASSWORD`, `DEEPSEEK_API_KEY`, TapData API
 base/token URLs, and (if needed) the collection map. Then
 `./scripts/demo-docker.sh all` brings up the complete local demo.
@@ -296,8 +331,10 @@ The backup of `tapdata_casino_marketing` contains 23 collections and 128,368
 documents. It was restored and verified in a separate cloud Docker project.
 Default write blocking, a single feeder tick, unchanged identities/risk flags/
 collection counts, repeat-restore preservation, restart persistence and the
-AI panel HTTP 200 check all passed. The original cloud services remain running.
-No port cutover or live TapData import was performed.
+AI panel HTTP 200 check all passed. The historical cloud services were later
+stopped and replaced by the new Docker stack; the old installation remains
+available in the rollback directory. The live TapData import and port cutover
+are documented in the cloud hand-off report.
 
 `docker-compose.cloud-test.yml` binds only localhost ports 37017 and 33000 and
 limits memory. Set `COMPOSE_PROFILES=` to omit the bundled TapData service when

@@ -30,6 +30,37 @@ compose() {
   docker compose --env-file "${ENV_FILE}" "${files[@]}" "$@"
 }
 
+env_file_value() {
+  local key="$1"
+  local line=""
+  if [[ -n "${!key:-}" ]]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  [[ -f "${ENV_FILE}" ]] || return 0
+  line="$(grep -E "^[[:space:]]*${key}=" "${ENV_FILE}" | tail -n 1 || true)"
+  line="${line#*=}"
+  line="${line%$'\r'}"
+  if [[ "${line:0:1}" == '"' && "${line: -1}" == '"' ]]; then line="${line:1:${#line}-2}"; fi
+  if [[ "${line:0:1}" == "'" && "${line: -1}" == "'" ]]; then line="${line:1:${#line}-2}"; fi
+  printf '%s' "${line}"
+}
+
+require_api_server_artifact() {
+  local profiles="$(env_file_value COMPOSE_PROFILES)"
+  [[ " ${profiles//,/ } " == *" bundled-tapdata "* ]] || return 0
+
+  local jar="$(env_file_value TAPDATA_API_SERVER_JAR)"
+  jar="${jar:-./secrets/tapdata-api/apiserver.jar}"
+  if [[ "${jar}" != /* ]]; then jar="${ROOT_DIR}/${jar#./}"; fi
+  if [[ ! -s "${jar}" ]]; then
+    printf 'TapData API Server artifact is required for the bundled stack.\n' >&2
+    printf 'Place the authorized Enterprise apiserver JAR at %s or set TAPDATA_API_SERVER_JAR.\n' "${jar}" >&2
+    printf 'The public community image does not contain the 3080 API Server.\n' >&2
+    exit 1
+  fi
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/demo-docker.sh <command>
@@ -60,6 +91,11 @@ case "${command}" in
   feeder|sources|all|once)
     compose --profile feeder config --format json | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{if(String(JSON.parse(s).services["source-feeder"]?.environment?.FEEDER_WRITE_ENABLED)!=="true"){console.error("Data writes are disabled. Obtain approval before setting FEEDER_WRITE_ENABLED=true.");process.exit(1)}})'
     node "${ROOT_DIR}/scripts/verify-source-backup.mjs" "${ROOT_DIR}/secrets/mongo-source" >/dev/null
+    ;;
+esac
+case "${command}" in
+  up|restart|all)
+    require_api_server_artifact
     ;;
 esac
 case "${command}" in
