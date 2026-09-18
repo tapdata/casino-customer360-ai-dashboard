@@ -69,7 +69,7 @@ ssh -i ~/Downloads/skeet-20260818.pem root@47.119.130.230
 
 1. **TapData 端点和认证**：需要完整管理端 URL、API Server URL、TapData 版本/版本类型，以及 API Token 或明确的登录认证方式。仅提供 `3030` 前端地址和一个 API 端口不足以执行自动导入。
 2. **MongoDB 连接参数**：需要 Source 和 MDM Target 的完整 URI，或 host、port、username、password、authSource、replicaSet、directConnection 等字段。密码不单独写入聊天或文档。
-3. **启动策略**：是否在 MDM 23 个集合验证和 API 发布后自动启动 CDC；未确认前保持 `AUTO_START_CDC=false`。
+3. **启动策略**：按当前自动化目标，默认在连接健康后自动启动这个单 CDC 任务，再等待 MDM 23 个集合有数据；如需要导入后保持停止，设置 `TAPDATA_IMPORT_AUTOSTART=false`。
 4. **网络位置**：如果对方 MongoDB 只监听 `127.0.0.1`，导入程序需要在同机执行或使用 SSH 隧道。
 
 当前 API 样例包原始包含 23 个模块；历史管理端有 20 个进入 `active` 列表，另外 3 个必须在新企业版中核对后才能报告为发布成功。
