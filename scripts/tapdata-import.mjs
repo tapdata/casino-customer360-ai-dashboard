@@ -282,6 +282,10 @@ function parseFormFields(raw, label) {
   }
 }
 
+function sleep(milliseconds) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}
+
 function appendFields(form, fields) {
   for (const [key, value] of Object.entries(fields)) {
     if (value == null) continue;
@@ -337,6 +341,7 @@ async function request(path, { method = "GET", form, body } = {}) {
       contentType,
       summary: payload ? Object.keys(payload).slice(0, 20) : [],
       itemCount: Array.isArray(data) ? data.length : Array.isArray(data?.items) ? data.items.length : undefined,
+      payload,
     };
   } finally {
     clearTimeout(timer);
@@ -360,8 +365,9 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
   if (!env.TAPDATA_IMPORT_TOKEN && !env.TAPDATA_ACCESS_TOKEN && !env.TAPDATA_IMPORT_AUTHORIZATION) {
     throw new Error("api mode requires TAPDATA_IMPORT_TOKEN (or TAPDATA_IMPORT_AUTHORIZATION) in the private environment");
   }
-  if (connectionPath && !env.TAPDATA_SOURCE_MONGODB_URI && !asBool(env.TAPDATA_IMPORT_ALLOW_MISSING_URI)) {
-    throw new Error("connection export omits the MongoDB URI; set TAPDATA_SOURCE_MONGODB_URI or explicitly allow missing URI");
+  const sourceMongoUri = env.TAPDATA_IMPORT_SOURCE_MONGODB_URI || env.TAPDATA_SOURCE_MONGODB_URI;
+  if (connectionPath && !sourceMongoUri && !asBool(env.TAPDATA_IMPORT_ALLOW_MISSING_URI)) {
+    throw new Error("connection export omits the MongoDB URI; set TAPDATA_IMPORT_SOURCE_MONGODB_URI (or TAPDATA_SOURCE_MONGODB_URI) or explicitly allow missing URI");
   }
   if (connectionPath && env.TAPDATA_SOURCE_MONGODB_URI && !env.TAPDATA_IMPORT_URI_FIELD) {
     throw new Error("set TAPDATA_IMPORT_URI_FIELD to the exact form field accepted by your TapData import endpoint");
@@ -424,10 +430,10 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
   log(`task list check accepted (HTTP ${taskList.status}${taskList.itemCount === undefined ? "" : `, items=${taskList.itemCount}`})`);
   log(`API module list check accepted (HTTP ${apiList.status}${apiList.itemCount === undefined ? "" : `, items=${apiList.itemCount}`})`);
 
-  if (asBool(env.TAPDATA_IMPORT_AUTOSTART)) {
-    if (!env.TAPDATA_TASK_START_PATH) {
-      throw new Error("TAPDATA_IMPORT_AUTOSTART=true requires the exact TAPDATA_TASK_START_PATH");
-    }
+  if (asBool(env.TAPDATA_IMPORT_POSTPROCESS)) {
+    await postProcessImport({ taskList, apiList, taskPath, apiPath });
+  } else if (asBool(env.TAPDATA_IMPORT_AUTOSTART)) {
+    if (!env.TAPDATA_TASK_START_PATH) throw new Error("TAPDATA_IMPORT_AUTOSTART=true requires the exact TAPDATA_TASK_START_PATH when post-processing is disabled");
     const startBody = env.TAPDATA_TASK_START_BODY_JSON ? parseFormFields(env.TAPDATA_TASK_START_BODY_JSON, "TAPDATA_TASK_START_BODY_JSON") : undefined;
     const result = await request(env.TAPDATA_TASK_START_PATH, {
       method: env.TAPDATA_TASK_START_METHOD || "POST",
@@ -436,6 +442,97 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
     log(`task start accepted (HTTP ${result.status})`);
   } else {
     log("task start skipped; set TAPDATA_IMPORT_AUTOSTART=true only after confirming the exact start endpoint");
+  }
+}
+
+function listItems(result, label) {
+  const items = result?.payload?.data?.items;
+  if (!Array.isArray(items)) throw new Error(`${label} list response did not contain data.items`);
+  return items;
+}
+
+function postProcessUri(name, uri, connection) {
+  if (!uri) throw new Error(`TAPDATA_IMPORT_POSTPROCESS requires a URI for ${name}`);
+  return {
+    id: connection.id,
+    name: connection.name,
+    database_type: connection.database_type || connection.databaseType || "MongoDB",
+    status: "testing",
+    submit: true,
+    config: {
+      isUri: true,
+      uri,
+      ssl: false,
+      mongodbLoadSchemaSampleSize: 1000,
+      schemaLimit: 1024,
+      __connectionType: "source_and_target",
+    },
+  };
+}
+
+async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
+  const connectionListPath = env.TAPDATA_CONNECTION_LIST_PATH || "/api/Connections";
+  const connectionPatchTemplate = env.TAPDATA_CONNECTION_PATCH_PATH || "/api/Connections/{id}";
+  const modulePatchPath = env.TAPDATA_MODULE_PATCH_PATH || "/api/Modules";
+  const connectionResult = await request(`${connectionListPath}${connectionListPath.includes("?") ? "&" : "?"}limit=1000`);
+  const connections = listItems(connectionResult, "connection");
+  const byName = new Map(connections.map((connection) => [connection.name, connection]));
+  const source = byName.get(env.TAPDATA_IMPORT_SOURCE_CONNECTION_NAME || "MongoDB_Source");
+  const target = byName.get(env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM");
+  const sourceUri = env.TAPDATA_IMPORT_SOURCE_MONGODB_URI || env.TAPDATA_SOURCE_MONGODB_URI;
+  const targetUri = env.TAPDATA_IMPORT_TARGET_MONGODB_URI;
+  if (!source || !target) throw new Error("post-processing requires the imported MongoDB_Source and MDM connections");
+
+  const patchedIds = new Set();
+  for (const [connection, uri] of [[source, sourceUri], [target, targetUri]]) {
+    const path = connectionPatchTemplate.replace("{id}", encodeURIComponent(connection.id));
+    await request(path, { method: "PATCH", body: postProcessUri(connection.name, uri, connection) });
+    patchedIds.add(connection.id);
+  }
+
+  const taskItems = listItems(taskList, "task");
+  const taskSummary = parseTaskExport(taskPath).task;
+  const task = taskItems.find((item) => item.name === taskSummary.name) || taskItems[taskItems.length - 1];
+  if (!task?.id) throw new Error("post-processing could not resolve the imported task id");
+
+  const apiItems = listItems(apiList, "API module");
+  const apiNames = new Set(parseModuleExport(apiPath).moduleNames);
+  const importedModules = apiItems.filter((item) => apiNames.has(item.name));
+  if (importedModules.length === 0) throw new Error("post-processing could not resolve imported API modules");
+  for (const module of importedModules) {
+    if (module.connectionId && !patchedIds.has(module.connectionId)) {
+      const moduleConnection = connections.find((connection) => connection.id === module.connectionId);
+      if (!moduleConnection) throw new Error(`API module ${module.name} references an unknown connection`);
+      const path = connectionPatchTemplate.replace("{id}", encodeURIComponent(moduleConnection.id));
+      await request(path, { method: "PATCH", body: postProcessUri(moduleConnection.name, targetUri, moduleConnection) });
+      patchedIds.add(moduleConnection.id);
+    }
+    await request(modulePatchPath, {
+      method: "PATCH",
+      body: { id: module.id, status: "active", tableName: module.tableName },
+    });
+  }
+
+  // Connection tests are asynchronous in TapData. Poll until every patched
+  // connection reports ready instead of claiming that a PATCH alone proved
+  // data-plane health.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    await sleep(5_000);
+    const current = await request(`${connectionListPath}${connectionListPath.includes("?") ? "&" : "?"}limit=1000`);
+    const currentById = new Map(listItems(current, "connection").map((connection) => [connection.id, connection]));
+    const statuses = [...patchedIds].map((id) => currentById.get(id)?.status);
+    if (statuses.every((status) => ["ready", "normal", "active"].includes(status))) break;
+    if (attempt === 11) throw new Error(`post-processing connection test did not become ready (statuses=${statuses.join(",")})`);
+  }
+  log(`post-processing verified ${patchedIds.size} MongoDB connection(s) and published ${importedModules.length} API module(s)`);
+
+  if (asBool(env.TAPDATA_IMPORT_AUTOSTART)) {
+    const template = env.TAPDATA_TASK_START_PATH_TEMPLATE;
+    const path = template ? template.replaceAll("{taskId}", encodeURIComponent(task.id)) : env.TAPDATA_TASK_START_PATH;
+    if (!path) throw new Error("TAPDATA_IMPORT_AUTOSTART=true requires TAPDATA_TASK_START_PATH or TAPDATA_TASK_START_PATH_TEMPLATE");
+    const startBody = env.TAPDATA_TASK_START_BODY_JSON ? parseFormFields(env.TAPDATA_TASK_START_BODY_JSON, "TAPDATA_TASK_START_BODY_JSON") : undefined;
+    const result = await request(path, { method: env.TAPDATA_TASK_START_METHOD || "POST", body: startBody });
+    log(`task start accepted after post-processing (HTTP ${result.status})`);
   }
 }
 

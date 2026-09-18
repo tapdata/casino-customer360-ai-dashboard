@@ -199,6 +199,24 @@ cp /path/to/module_batch-20260915.json.gz deploy/tapdata/exports/
 ./scripts/demo-docker.sh task-start
 ```
 
+For TapData 4.21 installations where the import creates installation-specific
+connection copies, the importer can finish the wiring without UI actions. Set
+the private values `TAPDATA_IMPORT_POSTPROCESS=true`,
+`TAPDATA_IMPORT_SOURCE_MONGODB_URI`, and
+`TAPDATA_IMPORT_TARGET_MONGODB_URI`. The post-processing step tests the source,
+target, and API-referenced connections until they report `ready`, publishes
+the imported modules, and (when `TAPDATA_IMPORT_AUTOSTART=true`) starts the
+imported task using `TAPDATA_TASK_START_PATH_TEMPLATE`, for example:
+
+```text
+/api/Task/batchStart?taskIds={taskId}
+```
+
+The URIs and import token remain private environment variables. The public
+community image still does not include a 3080 API Server process; provide an
+authorized API Server component or an external TapData API gateway before
+calling the published `/api/v1/...` routes.
+
 Set `TAPDATA_IMPORT_MODE=api` and `TAPDATA_IMPORT_TOKEN` in the private
 `.env.demo` file. The importer base is `TAPDATA_IMPORT_API_BASE_URL` (3030 for
 the Enterprise UI/API; it is separate from the published API gateway on 3080).

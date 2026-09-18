@@ -125,3 +125,70 @@ test('uploads task and API packages using the TapData 4.21 multipart contract', 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('can post-process imported connections, publish modules, and start the resolved task', async () => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      requests.push({ method: request.method, path: request.url, body: Buffer.concat(chunks).toString('utf8') });
+      response.setHeader('content-type', 'application/json');
+      const path = new URL(request.url, 'http://127.0.0.1').pathname;
+      let payload = { code: 'ok', data: { items: [] } };
+      if (path === '/api/Task') payload = { code: 'ok', data: { items: [{ id: 'task-1', name: 'Example' }] } };
+      if (path === '/api/Modules') payload = { code: 'ok', data: { items: [{ id: 'module-1', name: 'Example API', tableName: 'example', connectionId: 'api-connection' }] } };
+      if (path === '/api/Connections') payload = { code: 'ok', data: { items: [
+        { id: 'source-connection', name: 'MongoDB_Source', status: 'ready' },
+        { id: 'target-connection', name: 'MDM', status: 'ready' },
+        { id: 'api-connection', name: 'MDM_import', status: 'ready' },
+      ] } };
+      response.end(JSON.stringify(payload));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const dir = mkdtempSync(join(tmpdir(), 'tapdata-import-postprocess-test-'));
+  try {
+    writeFileSync(join(dir, 'connection.xlsx'), workbookProbe);
+    writeFileSync(join(dir, 'task.json'), JSON.stringify([{ collectionName: 'Task', json: JSON.stringify({ name: 'Example' }) }]));
+    writeFileSync(join(dir, 'api.json'), JSON.stringify([{ collectionName: 'Modules', json: JSON.stringify({ name: 'Example API' }) }]));
+    const result = await new Promise((resolve) => {
+      const child = spawn(process.execPath, ['scripts/tapdata-import.mjs', 'api'], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          TAPDATA_CONNECTION_EXPORT: join(dir, 'connection.xlsx'),
+          TAPDATA_TASK_EXPORT: join(dir, 'task.json'),
+          TAPDATA_API_EXPORT: join(dir, 'api.json'),
+          TAPDATA_IMPORT_STATE_DIR: dir,
+          TAPDATA_API_BASE_URL: `http://127.0.0.1:${address.port}`,
+          TAPDATA_IMPORT_TOKEN: 'test-secret',
+          TAPDATA_IMPORT_ALLOW_MISSING_URI: 'true',
+          TAPDATA_IMPORT_POSTPROCESS: 'true',
+          TAPDATA_IMPORT_SOURCE_MONGODB_URI: 'mongodb://source.invalid/source',
+          TAPDATA_IMPORT_TARGET_MONGODB_URI: 'mongodb://target.invalid/target',
+          TAPDATA_IMPORT_AUTOSTART: 'true',
+          TAPDATA_TASK_START_PATH_TEMPLATE: '/api/Task/batchStart?taskIds={taskId}',
+          TAPDATA_TASK_START_METHOD: 'PUT',
+        },
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const paths = requests.map((request) => `${request.method} ${new URL(request.path, 'http://127.0.0.1').pathname}${new URL(request.path, 'http://127.0.0.1').search}`);
+    assert.equal(paths.filter((path) => path.startsWith('PATCH /api/Connections/')).length, 3);
+    assert.equal(paths.filter((path) => path.startsWith('PATCH /api/Modules?')).length, 1);
+    assert.ok(paths.some((path) => path.startsWith('PUT /api/Task/batchStart?taskIds=task-1')));
+    assert.match(result.stdout, /post-processing verified 3 MongoDB connection\(s\) and published 1 API module\(s\)/);
+    assert.doesNotMatch(result.stdout + result.stderr, /test-secret/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
