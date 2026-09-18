@@ -53,7 +53,9 @@ function resolveArtifact(explicitPath, kind, fileName) {
     ? ["connection", "connections"]
     : kind === "task"
       ? ["task", "tasks"]
-      : [kind];
+      : kind === "api"
+        ? ["api", "apis", "modules"]
+        : [kind];
   const candidates = [
     ...kindDirs.map((dir) => join(importRoot, dir, fileName)),
     join(importRoot, fileName),
