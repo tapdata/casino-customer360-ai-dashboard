@@ -53,6 +53,26 @@ fan out to two targets in that task. A Join task produces one target collection.
    (`v1`, `v2`, etc.), and service names before putting them in `.env.demo`.
 7. Use `./scripts/demo-docker.sh up` to run the AI panel against those published APIs.
 
+### External Enterprise one-command onboarding
+
+When a colleague provides an existing TapData Enterprise deployment, use the
+external profile rather than starting the bundled TapData services:
+
+```bash
+cp .env.external.example .env.external
+# Fill .env.external privately with the manager/API URLs, token, and the
+# Source/MDM MongoDB URIs. Do not commit the file.
+./scripts/external-tapdata-onboard.sh .env.external
+```
+
+The command restores the private 23-collection Source archive into
+`tapdata_casino_marketing` when enabled, uploads the existing single CDC task
+and API package through the provider's manager API, patches the Source and
+`marketing_mdm` Target connections, starts CDC, waits for all 23 MDM
+collections to contain data, publishes the APIs, and starts the AI panel on
+port 3000. The provider's manager API and published API server must be
+reachable from the machine running the command.
+
 ### Which import path should I use?
 
 For TapData Enterprise 4.21, `scripts/tapdata-import.mjs` calls the same

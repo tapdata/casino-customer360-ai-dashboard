@@ -36,6 +36,7 @@ yarn-error.log*
 !.env.source-feeder.example
 !.env.tapdata.example
 !.env.demo.example
+!.env.external.example
 
 # Local/private deployment material. The public kit mounts this directory
 # read-only into TapData but never commits credentials or licenses.

@@ -1,0 +1,11 @@
+# External TapData overlay.
+# Use together with docker-compose.demo.yml. It removes the bundled demo
+# source-restore dependency; the source archive is restored to the provider's
+# MongoDB by scripts/external-tapdata-onboard.sh when enabled.
+services:
+  ai-panel:
+    depends_on:
+      mongo:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully

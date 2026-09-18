@@ -20,10 +20,13 @@ async function restore() {
   }
   const uri = process.env.SOURCE_RESTORE_URI;
   if (!uri) throw new Error('SOURCE_RESTORE_URI is required');
-  // This service is exclusively for the bundled MongoDB, never the cloud source.
   const parsed = new URL(uri);
-  if (parsed.hostname !== 'mongo' || parsed.port !== '27017' || parsed.pathname !== `/${database}`) {
+  const allowRemote = process.env.SOURCE_RESTORE_ALLOW_REMOTE === 'true';
+  if (!allowRemote && (parsed.hostname !== 'mongo' || parsed.port !== '27017' || parsed.pathname !== `/${database}`)) {
     throw new Error('Restore target must be the bundled mongo:27017 source database');
+  }
+  if (allowRemote && parsed.pathname !== `/${database}`) {
+    throw new Error(`Restore target database must be ${database}`);
   }
   const target = (await connect(uri)).getSiblingDB(database);
   const state = target.getSiblingDB('demo_deployment_state').getCollection('source_restores');

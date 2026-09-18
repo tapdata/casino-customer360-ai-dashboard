@@ -92,6 +92,9 @@ read-only preflight
 
 ## 重要文件
 
+- `.env.external.example`：外部 TapData 接入配置模板；复制后只在私有环境文件中填写端点和凭据。
+- `scripts/external-tapdata-onboard.sh`：恢复 Source、导入/启动单 CDC、等待 MDM 数据、发布 API、启动 AI 面板的一键入口。
+- `docker-compose.external.yml`：外部 TapData 覆盖层，不启动 bundled TapData，也不强制运行本地 source-restore。
 - `scripts/tapdata-import.mjs`：TapData 导入及后处理逻辑。
 - `scripts/demo-docker.sh`：历史 Docker 部署入口；当前新方案不应默认启动 TapData。
 - `docker-compose.demo.yml`：历史 Docker 编排，除非用户重新启用 Docker 方案，不要启动它。
@@ -101,4 +104,4 @@ read-only preflight
 
 ## 给下一模型的第一步
 
-先阅读本文件和 `项目交接与部署状态.md` 顶部，不要先启动 Docker 或停止云服务器旧服务。然后向用户收集上面 7 项中缺失的配置；收到配置后先实现只读 preflight，再执行导入和回归测试。任何密钥只能通过服务器私有环境变量或密钥文件提供。
+先阅读本文件和 `项目交接与部署状态.md` 顶部，不要先启动 Docker 或停止云服务器旧服务。收到外部端点和私有配置后，使用 `scripts/external-tapdata-onboard.sh .env.external`；它先恢复 Source，再导入并启动单 CDC，等待 MDM 数据，发布 API，最后启动 AI 面板。任何密钥只能通过服务器私有环境变量或密钥文件提供。
