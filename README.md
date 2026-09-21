@@ -1,4 +1,4 @@
-> **已有 TapData 企业版的演示迁移**：使用 [EXTERNAL_DEMO.md](EXTERNAL_DEMO.md) 中的原生部署入口，填写 `.env.external` 后自动恢复 MongoDB 数据、导入任务/API，并启动 AI 面板及持续造数据。无需 Docker，面板默认端口 3000。下方 Docker 说明属于历史可选方案。
+> **客户一键部署入口**：同事只需从 Git 拉取代码后执行 `bash run-demo.sh`，配置向导中的普通项可以一路按 Enter；程序会自动安装运行依赖、恢复 Git 中的匿名 MongoDB 数据、导入或复用任务/API，并启动 AI 面板。请先看 [CUSTOMER_QUICKSTART.md](CUSTOMER_QUICKSTART.md)。工程验收和外部部署细节见 [EXTERNAL_DEMO.md](EXTERNAL_DEMO.md)。无需 Docker，面板默认端口 3000。下方 Docker 说明属于历史可选方案。
 
 # AI Loyalty Engine Command Center
 

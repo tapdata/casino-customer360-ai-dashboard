@@ -6,8 +6,9 @@
  * TapData export/import endpoints are edition/version specific, so this tool
  * deliberately follows the official TapData 4.21 browser API contract. The
  * routes and multipart field names are still configurable for other editions.
- * `manual` mode is safe for preparing a hand-off manifest; `api` mode uploads
- * task and API packages as copies and never starts a task by default.
+ * `manual` mode is safe for preparing a hand-off manifest; `api` mode checks
+ * exact task/API names first, uploads missing packages as copies, and never
+ * starts a task unless the configured post-processing/autostart flow enables it.
  */
 
 import { createHash } from "node:crypto";
@@ -442,10 +443,37 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
   const connectionFields = parseFormFields(env.TAPDATA_IMPORT_CONNECTION_FORM_FIELDS_JSON, "TAPDATA_IMPORT_CONNECTION_FORM_FIELDS_JSON");
   const taskFields = parseFormFields(env.TAPDATA_IMPORT_TASK_FORM_FIELDS_JSON, "TAPDATA_IMPORT_TASK_FORM_FIELDS_JSON");
   const commonFields = parseFormFields(env.TAPDATA_IMPORT_FORM_FIELDS_JSON, "TAPDATA_IMPORT_FORM_FIELDS_JSON");
+  const taskSummary = parseTaskExport(taskPath).task;
+  const apiSummary = parseModuleExport(apiPath);
+  const taskListPath = env.TAPDATA_TASK_LIST_PATH || "/api/Task";
+  const apiListPath = env.TAPDATA_API_LIST_PATH || "/api/Modules";
+  let taskList;
+  let apiList;
+  let skipExistingImport = false;
+  if (asBool(env.TAPDATA_IMPORT_SKIP_EXISTING, true)) {
+    // A fresh checkout has no deployment checkpoint. Query exact names before
+    // uploading so a colleague's already prepared task/API is reused instead
+    // of creating an `import_as_copy` duplicate.
+    taskList = await request(`${taskListPath}${taskListPath.includes("?") ? "&" : "?"}limit=1000`);
+    apiList = await request(`${apiListPath}${apiListPath.includes("?") ? "&" : "?"}limit=1000`);
+    const existingTasks = listItems(taskList, "task");
+    const existingModules = listItems(apiList, "API module");
+    const existingTask = existingTasks.find((task) => task.name === taskSummary.name);
+    const existingNames = new Set(existingModules.map((module) => module.name));
+    const existingApiNames = apiSummary.moduleNames.filter((name) => existingNames.has(name));
+    if (existingTask || existingApiNames.length > 0) {
+      const missing = apiSummary.moduleNames.filter((name) => !existingNames.has(name));
+      if (!existingTask || missing.length > 0) {
+        throw new Error(`partial same-name import detected (task=${Boolean(existingTask)}, missingApiModules=${missing.length}); inspect TapData before retrying`);
+      }
+      skipExistingImport = true;
+      log(`same-name task and ${existingApiNames.length} API modules already exist; skipping upload`);
+    }
+  }
   let uploadTaskPath = taskPath;
   let uploadApiPath = apiPath;
   let remapDir;
-  if (asBool(env.TAPDATA_IMPORT_USE_EXISTING_TARGET)) {
+  if (!skipExistingImport && asBool(env.TAPDATA_IMPORT_USE_EXISTING_TARGET)) {
     const connectionListPath = env.TAPDATA_CONNECTION_LIST_PATH || "/api/Connections";
     const connectionResult = await request(`${connectionListPath}${connectionListPath.includes("?") ? "&" : "?"}limit=1000`);
     const existingTarget = listItems(connectionResult, "connection").find((connection) => connection.name === (env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM"));
@@ -455,7 +483,7 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
     uploadApiPath = remapExistingTargetExport(apiPath, env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM", existingTarget.id, remapDir);
     log("prepared task and API imports to reuse the existing TapData MDM connection");
   }
-  if (connectionPathApi && connectionPath) {
+  if (!skipExistingImport && connectionPathApi && connectionPath) {
     if (env.TAPDATA_SOURCE_MONGODB_URI) connectionFields[env.TAPDATA_IMPORT_URI_FIELD] = env.TAPDATA_SOURCE_MONGODB_URI;
     log("uploading connection export (credentials are not printed)");
     const connectionResult = await uploadExport(
@@ -465,37 +493,43 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
       { ...commonFields, ...connectionFields },
     );
     log(`connection import accepted (HTTP ${connectionResult.status})`);
-  } else if (connectionPath) {
+  } else if (!skipExistingImport && connectionPath) {
     log("connection XLSX upload skipped; the task package will be imported with its embedded connection records");
   }
 
-  log("uploading task export after connection import");
-  const taskResult = await uploadExport(
-    taskPathApi,
-    uploadTaskPath,
-    "file",
-    {
-      ...commonFields,
-      ...taskFields,
-      type: env.TAPDATA_TASK_IMPORT_TYPE || "dataflow",
-      importMode: env.TAPDATA_TASK_IMPORT_MODE || "import_as_copy",
-      listtags: parseJsonValue(env.TAPDATA_IMPORT_LISTTAGS_JSON || "[]"),
-    },
-  );
-  log(`task import accepted (HTTP ${taskResult.status})`);
+  if (!skipExistingImport) {
+    log("uploading task export after connection import");
+    const taskResult = await uploadExport(
+      taskPathApi,
+      uploadTaskPath,
+      "file",
+      {
+        ...commonFields,
+        ...taskFields,
+        type: env.TAPDATA_TASK_IMPORT_TYPE || "dataflow",
+        importMode: env.TAPDATA_TASK_IMPORT_MODE || "import_as_copy",
+        listtags: parseJsonValue(env.TAPDATA_IMPORT_LISTTAGS_JSON || "[]"),
+      },
+    );
+    log(`task import accepted (HTTP ${taskResult.status})`);
 
-  log("uploading API module export");
-  const apiResult = await uploadExport(
-    apiPathApi,
-    uploadApiPath,
-    "file",
-    {
-      type: env.TAPDATA_API_IMPORT_TYPE || "Modules",
-      importMode: env.TAPDATA_API_IMPORT_MODE || "import_as_copy",
-      listtags: parseJsonValue(env.TAPDATA_IMPORT_LISTTAGS_JSON || "[]"),
-    },
-  );
-  log(`API module import accepted (HTTP ${apiResult.status})`);
+    log("uploading API module export");
+    const apiResult = await uploadExport(
+      apiPathApi,
+      uploadApiPath,
+      "file",
+      {
+        type: env.TAPDATA_API_IMPORT_TYPE || "Modules",
+        importMode: env.TAPDATA_API_IMPORT_MODE || "import_as_copy",
+        listtags: parseJsonValue(env.TAPDATA_IMPORT_LISTTAGS_JSON || "[]"),
+      },
+    );
+    log(`API module import accepted (HTTP ${apiResult.status})`);
+    // Refresh after the remote mutation; the preflight lists intentionally
+    // represented the state before the upload.
+    taskList = undefined;
+    apiList = undefined;
+  }
   if (remapDir) rmSync(remapDir, { recursive: true, force: true });
 
   if (env.TAPDATA_CONNECTION_LIST_PATH) {
@@ -503,10 +537,8 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
     log(`connection list check accepted (HTTP ${result.status})`);
   }
 
-  const verifyTaskPath = env.TAPDATA_TASK_LIST_PATH || "/api/Task";
-  const verifyApiPath = env.TAPDATA_API_LIST_PATH || "/api/Modules";
-  const taskList = await request(verifyTaskPath);
-  const apiList = await request(verifyApiPath);
+  if (!taskList) taskList = await request(taskListPath);
+  if (!apiList) apiList = await request(apiListPath);
   log(`task list check accepted (HTTP ${taskList.status}${taskList.itemCount === undefined ? "" : `, items=${taskList.itemCount}`})`);
   log(`API module list check accepted (HTTP ${apiList.status}${apiList.itemCount === undefined ? "" : `, items=${apiList.itemCount}`})`);
 

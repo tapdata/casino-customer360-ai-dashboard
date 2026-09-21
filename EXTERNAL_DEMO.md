@@ -3,7 +3,7 @@
 本入口直接使用对方的 TapData、API Server 和 MongoDB，不使用 Docker。
 在需要运行 AI 面板的 Linux 服务器上操作；该服务器、TapData Engine 和 API Server 都必须能访问配置的 MongoDB。
 
-如果要在云服务器上先手动复现同事的完整流程，按 [云上同事 Demo 手动全流程验收](artifacts/云上同事Demo手动全流程验收.md) 执行；已有任务/API 的服务器请使用其中的“安全回归”分支，避免重复导入。
+同事实际使用时只需要看 [客户一键部署说明](CUSTOMER_QUICKSTART.md)。如果要在云服务器上做逐项验收，再按 [云上同事 Demo 手动全流程验收](artifacts/云上同事Demo手动全流程验收.md) 执行；已有任务/API 的服务器请使用其中的“安全回归”分支，避免重复导入。
 
 ## 一次性准备
 
