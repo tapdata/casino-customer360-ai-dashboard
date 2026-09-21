@@ -9,7 +9,6 @@ const base = {
   TAPDATA_IMPORT_API_BASE_URL: 'http://127.0.0.1:1',
   TAPDATA_API_BASE_URL: 'http://127.0.0.1:1',
   TAPDATA_IMPORT_SOURCE_MONGODB_URI: 'mongodb://user:DO_NOT_PRINT@localhost/tapdata_casino_marketing',
-  TAPDATA_IMPORT_TARGET_MONGODB_URI: 'mongodb://localhost/marketing_mdm',
   MONGO_AUDIT_URI: 'mongodb://localhost/marketing_demo',
   AI_PANEL_PUBLIC_HOST: 'demo.example.com',
   TAPDATA_IMPORT_TOKEN: 'DO_NOT_PRINT', TAPDATA_ACCESS_TOKEN: 'DO_NOT_PRINT',

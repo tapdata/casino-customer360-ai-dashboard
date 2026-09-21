@@ -19,7 +19,7 @@ function run(command, args, env, label) {
 function config() {
   const supplied = parseEnv(readFileSync(configPath, 'utf8'));
   const env = { ...process.env, ...supplied, PATH: `${dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}` };
-  for (const key of ['TAPDATA_IMPORT_API_BASE_URL', 'TAPDATA_API_BASE_URL', 'TAPDATA_IMPORT_SOURCE_MONGODB_URI', 'TAPDATA_IMPORT_TARGET_MONGODB_URI', 'MONGO_AUDIT_URI', 'AI_PANEL_PUBLIC_HOST']) {
+  for (const key of ['TAPDATA_IMPORT_API_BASE_URL', 'TAPDATA_API_BASE_URL', 'TAPDATA_IMPORT_SOURCE_MONGODB_URI', 'MONGO_AUDIT_URI', 'AI_PANEL_PUBLIC_HOST']) {
     if (!supplied[key] || /[<>]/.test(supplied[key])) throw new Error(`Configure ${key}`);
   }
   if (!supplied.TAPDATA_IMPORT_TOKEN && !supplied.TAPDATA_IMPORT_AUTHORIZATION) throw new Error('Configure TapData import authentication');
@@ -49,7 +49,7 @@ function config() {
 }
 async function preflight(env) {
   const { MongoClient } = await import('mongodb');
-  for (const [key, database] of [['TAPDATA_IMPORT_SOURCE_MONGODB_URI', 'tapdata_casino_marketing'], ['TAPDATA_IMPORT_TARGET_MONGODB_URI', 'marketing_mdm'], ['MONGO_AUDIT_URI', env.MONGO_AUDIT_DB || 'marketing_demo']]) {
+  for (const [key, database] of [['TAPDATA_IMPORT_SOURCE_MONGODB_URI', 'tapdata_casino_marketing'], ['MONGO_AUDIT_URI', env.MONGO_AUDIT_DB || 'marketing_demo']]) {
     const client = new MongoClient(env[key], { serverSelectionTimeoutMS: 5000 });
     try {
       if (key !== 'MONGO_AUDIT_URI' && client.options.dbName !== database) throw new Error('Wrong database');
@@ -103,30 +103,64 @@ async function supervise(env) {
   start(['node_modules/next/dist/bin/next', 'start', '-p', env.AI_PANEL_PORT, '-H', '0.0.0.0'], 'Panel');
   if (env.FEEDER_ENABLED !== 'false') start(['scripts/mongo-source-feeder.mjs'], 'Feeder');
 }
+let publishedTokenCache;
+async function publishedToken(env) {
+  if (env.TAPDATA_ACCESS_TOKEN) return env.TAPDATA_ACCESS_TOKEN;
+  if (publishedTokenCache?.expiresAt > Date.now() + 30_000) return publishedTokenCache.value;
+  const form = new URLSearchParams({ grant_type: 'client_credentials' });
+  const headers = { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' };
+  if (env.TAPDATA_TOKEN_AUTH_METHOD === 'client_secret_basic') {
+    headers.authorization = `Basic ${Buffer.from(`${env.TAPDATA_CLIENT_ID}:${env.TAPDATA_CLIENT_SECRET}`).toString('base64')}`;
+  } else {
+    form.set('client_id', env.TAPDATA_CLIENT_ID);
+    form.set('client_secret', env.TAPDATA_CLIENT_SECRET);
+  }
+  const response = await fetch(env.TAPDATA_TOKEN_URL, { method: 'POST', headers, body: form, signal: AbortSignal.timeout(8000), redirect: 'error' });
+  if (!response.ok) throw new Error('Published API token request failed');
+  const payload = await response.json();
+  const value = payload.access_token || payload.accessToken || payload.data?.access_token || payload.data?.accessToken;
+  if (typeof value !== 'string' || !value) throw new Error('Published API token response was invalid');
+  publishedTokenCache = { value, expiresAt: Date.now() + Math.max(Number(payload.expires_in || payload.expiresIn || 300), 60) * 1000 };
+  return value;
+}
+async function publishedFind(env, collection, filter) {
+  const token = await publishedToken(env);
+  const path = (env.TAPDATA_FIND_PATH_TEMPLATE || '/api/v1/{collection}/find').replaceAll('{collection}', encodeURIComponent(collection));
+  const url = new URL(path, env.TAPDATA_API_BASE_URL);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ page: 1, limit: 100, filter }),
+    signal: AbortSignal.timeout(15000),
+    redirect: 'error',
+  });
+  if (!response.ok) throw new Error(`Published API query failed (${response.status})`);
+  const payload = await response.json();
+  const candidates = [payload?.data?.items, payload?.data?.records, payload?.items, payload?.records, Array.isArray(payload?.data) ? payload.data : undefined];
+  return candidates.find(Array.isArray) || [];
+}
 async function verifyCdc(env) {
   if (env.FEEDER_ENABLED === 'false') return;
   const { MongoClient } = await import('mongodb');
   const { feederConfig, runTick } = await import('./mongo-source-feeder.mjs');
   const source = new MongoClient(env.SOURCE_MONGO_URI, { serverSelectionTimeoutMS: 5000 });
-  const target = new MongoClient(env.TAPDATA_IMPORT_TARGET_MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
   try {
     await source.connect();
-    await target.connect();
     const since = new Date();
     const result = await runTick(source, feederConfig(env));
     if (!result.updated) throw new Error('CDC probe found no active source sessions to update');
     const rows = await source.db('tapdata_casino_marketing').collection('patron_table_sessions').find({ lastActionAt: { $gte: since } }).toArray();
     if (!rows.length) throw new Error('CDC probe could not read updated source sessions');
     for (let attempt = 0; attempt < 60; attempt++) {
-      const copies = await target.db('marketing_mdm').collection('patron_table_sessions').find({ _id: { $in: rows.map(row => row._id) } }).toArray();
-      if (rows.every(row => copies.some(copy => String(copy._id) === String(row._id) && Number(copy.sessionBetAmount) === Number(row.sessionBetAmount)))) {
+      const copies = await publishedFind(env, 'patron_table_sessions', { playerId: rows[0].playerId });
+      if (copies.some(copy => String(copy.playerId) === String(rows[0].playerId) && Number(copy.sessionBetAmount) === Number(rows[0].sessionBetAmount))) {
         log('Source update reached MDM; CDC probe passed');
         return;
       }
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     throw new Error('CDC probe timed out; source changes did not reach MDM');
-  } finally { await source.close(); await target.close(); }
+  } finally { await source.close(); }
 }
 async function ready(env) {
   for (let i = 0; i < 30; i++) {
@@ -154,7 +188,7 @@ async function main() {
   await preflight(env);
   if (mode === 'check') return;
   // Refuse to silently reimport after a partial or uncertain remote mutation.
-  const fingerprint = createHash('sha256').update(JSON.stringify([env.TAPDATA_IMPORT_API_BASE_URL, env.TAPDATA_IMPORT_SOURCE_MONGODB_URI, env.TAPDATA_IMPORT_TARGET_MONGODB_URI, ...['tasks/TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz', 'apis/module_batch-20260915.json.gz'].map(file => createHash('sha256').update(readFileSync(join(env.TAPDATA_IMPORT_ROOT, file))).digest('hex'))])).digest('hex');
+  const fingerprint = createHash('sha256').update(JSON.stringify([env.TAPDATA_IMPORT_API_BASE_URL, env.TAPDATA_IMPORT_SOURCE_MONGODB_URI, env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || 'MDM', ...['tasks/TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz', 'apis/module_batch-20260915.json.gz'].map(file => createHash('sha256').update(readFileSync(join(env.TAPDATA_IMPORT_ROOT, file))).digest('hex'))])).digest('hex');
   const checkpoint = join(state, 'deployment.json');
   const previous = existsSync(checkpoint) ? JSON.parse(readFileSync(checkpoint, 'utf8')) : null;
   if (previous && (previous.fingerprint !== fingerprint || previous.phase !== 'imported')) throw new Error('Deployment config changed or import was interrupted. Inspect runtime/external-demo/deployment.json and remote tasks before retrying; automatic duplicate imports are blocked');

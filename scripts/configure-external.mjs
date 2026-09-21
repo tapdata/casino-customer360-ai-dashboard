@@ -55,7 +55,6 @@ async function main() {
       config.TAPDATA_CLIENT_SECRET = await ask('OAuth client secret', '', true);
     }
     config.TAPDATA_IMPORT_SOURCE_MONGODB_URI = mongoDatabase(await ask('源 MongoDB 完整 URI（含认证与副本集参数）', '', true, mongo), 'tapdata_casino_marketing');
-    config.TAPDATA_IMPORT_TARGET_MONGODB_URI = mongoDatabase(await ask('MDM MongoDB URI', mongoDatabase(config.TAPDATA_IMPORT_SOURCE_MONGODB_URI, 'marketing_mdm'), true, mongo), 'marketing_mdm');
     config.MONGO_AUDIT_URI = mongoDatabase(await ask('面板状态 MongoDB URI', mongoDatabase(config.TAPDATA_IMPORT_SOURCE_MONGODB_URI, 'marketing_demo'), true, mongo), 'marketing_demo');
     config.AI_PANEL_PUBLIC_HOST = await ask('面板服务器 IP 或域名', '', false, v => /^[a-zA-Z0-9.-]+$/.test(v));
     config.AI_PANEL_PORT = await ask('面板端口', '3000', false, v => /^\d+$/.test(v) && Number(v) >= 1024 && Number(v) <= 65535);

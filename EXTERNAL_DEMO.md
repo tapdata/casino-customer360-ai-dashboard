@@ -6,7 +6,7 @@
 ## 一次性准备
 
 服务器需要 Linux、systemd、curl 和能访问外网的 HTTPS；安装脚本会在缺少 Node.js 22.13+ 时下载并校验 Node.js，并通过 Node.js 驱动恢复 Git 中的演示数据，不需要安装 MongoDB 服务端、mongosh 或 mongorestore。
-MongoDB 源库须支持事务与 CDC（副本集或分片集群）。准备空的 `tapdata_casino_marketing` 源库、`marketing_mdm` 中间库和独立的 `marketing_demo` 面板状态库及对应权限。
+MongoDB 源库须支持事务与 CDC（副本集或分片集群）。准备空的 `tapdata_casino_marketing` 源库和独立的 `marketing_demo` 面板状态库及对应权限。MDM 由 TapData Enterprise 自带，使用已有的 `MDM` 连接，不在这一步创建或填写 MDM MongoDB URI。
 
 任务/API 模板已整理到 `deploy/tapdata/templates/`，匿名化后的 23 个 MongoDB 集合位于 `seed/demo/`，都随 Git 分发。原始导出和原始数据库备份仍保留在被 Git 忽略的目录中，不参与交付。
 
@@ -24,7 +24,7 @@ MongoDB 源库须支持事务与 CDC（副本集或分片集群）。准备空�
 sudo bash scripts/install-external.sh
 ```
 
-首次运行会提示填写 TapData 管理端、API Server、MongoDB、AI 密钥和面板端口（默认 3000），然后检查连接、认证和模板，恢复匿名演示源库，调用导入器导入任务/API、替换连接、启动 CDC，等待 API 包声明的 MDM 集合都有数据后发布 API。随后执行一次源库数据更新并等待该更新到达 MDM，安装并启动 systemd 服务，检查面板返回 live 数据且无 partial/warnings，输出访问地址。
+首次运行会提示填写 TapData 管理端、API Server、源 MongoDB、面板状态库、AI 密钥和面板端口（默认 3000），然后检查连接、认证和模板，恢复匿名演示源库，复用 TapData 已有的 `MDM` 连接，导入任务/API 并启动 CDC。随后通过已发布 API 检查源库更新已到达 MDM，安装并启动 systemd 服务，检查面板返回 live 数据且无 partial/warnings，输出访问地址。
 
 源库恢复拒绝覆盖非空且没有成功恢复标记的数据库。同配置成功导入后重跑会复用导入检查点，修改面板端口或 AI 密钥无需再次导入。目标实例、Mongo URI 或导出包变化，以及导入中途失败时，程序会阻止再次导入以避免生成重复任务；此时需要检查远端实际状态与 `runtime/external-demo/deployment.json`，不应盲目删除检查点。
 

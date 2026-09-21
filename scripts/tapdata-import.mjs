@@ -561,16 +561,22 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
   const target = byName.get(env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM");
   const sourceUri = env.TAPDATA_IMPORT_SOURCE_MONGODB_URI || env.TAPDATA_SOURCE_MONGODB_URI;
   const targetUri = env.TAPDATA_IMPORT_TARGET_MONGODB_URI;
-  if (!source || !target) throw new Error("post-processing requires the imported MongoDB_Source and MDM connections");
+  const useExistingTarget = asBool(env.TAPDATA_IMPORT_USE_EXISTING_TARGET);
+  if (!source || !target) throw new Error("post-processing requires MongoDB_Source and the existing TapData MDM connection");
   assertMongoDatabase(sourceUri, env.TAPDATA_IMPORT_SOURCE_MONGODB_DB, "Source");
-  assertMongoDatabase(targetUri, env.TAPDATA_IMPORT_TARGET_MONGODB_DB, "Target");
+  if (!useExistingTarget) {
+    assertMongoDatabase(targetUri, env.TAPDATA_IMPORT_TARGET_MONGODB_DB, "Target");
+  } else if (targetUri) {
+    log("using the existing TapData MDM connection; target URI is ignored");
+  }
 
   const patchedIds = new Set();
-  for (const [connection, uri] of [[source, sourceUri], [target, targetUri]]) {
+  for (const [connection, uri] of useExistingTarget ? [[source, sourceUri]] : [[source, sourceUri], [target, targetUri]]) {
     const path = connectionPatchTemplate.replace("{id}", encodeURIComponent(connection.id));
     await request(path, { method: "PATCH", body: postProcessUri(connection.name, uri, connection) });
     patchedIds.add(connection.id);
   }
+  if (useExistingTarget) patchedIds.add(target.id);
 
   const taskItems = listItems(taskList, "task");
   const taskSummary = parseTaskExport(taskPath).task;
@@ -586,10 +592,10 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
   if (missingModules.length > 0 && !asBool(env.TAPDATA_IMPORT_ALLOW_PARTIAL_API)) {
     throw new Error(`post-processing could not resolve all API modules (missing=${missingModules.join(",")})`);
   }
-  for (const module of importedModules) {
-    if (module.connectionId && !patchedIds.has(module.connectionId)) {
-      const moduleConnection = connections.find((connection) => connection.id === module.connectionId);
-      if (!moduleConnection) throw new Error(`API module ${module.name} references an unknown connection`);
+  for (const apiModule of importedModules) {
+    if (apiModule.connectionId && !patchedIds.has(apiModule.connectionId) && !useExistingTarget) {
+      const moduleConnection = connections.find((connection) => connection.id === apiModule.connectionId);
+      if (!moduleConnection) throw new Error(`API module ${apiModule.name} references an unknown connection`);
       const path = connectionPatchTemplate.replace("{id}", encodeURIComponent(moduleConnection.id));
       await request(path, { method: "PATCH", body: postProcessUri(moduleConnection.name, targetUri, moduleConnection) });
       patchedIds.add(moduleConnection.id);
@@ -618,16 +624,27 @@ async function postProcessImport({ taskList, apiList, taskPath, apiPath }) {
   }
 
   if (asBool(env.TAPDATA_IMPORT_VERIFY_MDM_DATA)) {
-    if (!targetUri) throw new Error("TAPDATA_IMPORT_VERIFY_MDM_DATA=true requires TAPDATA_IMPORT_TARGET_MONGODB_URI");
+    if (useExistingTarget) {
+      log("skipping direct MongoDB MDM verification; TapData Enterprise manages the existing MDM connection");
+    } else if (!targetUri) {
+      throw new Error("TAPDATA_IMPORT_VERIFY_MDM_DATA=true requires TAPDATA_IMPORT_TARGET_MONGODB_URI");
+    }
     const expectedCollections = parseJsonArray(env.TAPDATA_IMPORT_MDM_COLLECTIONS_JSON, "TAPDATA_IMPORT_MDM_COLLECTIONS_JSON") || apiSummary.moduleTableNames;
     if (expectedCollections.length === 0) throw new Error("MDM data verification requires expected collection names");
-    await waitForMdmCollections(targetUri, expectedCollections);
+    if (!useExistingTarget) await waitForMdmCollections(targetUri, expectedCollections);
   }
 
-  for (const module of importedModules) {
+  for (const apiModule of importedModules) {
+    const modulePatch = { id: apiModule.id, status: "active", tableName: apiModule.tableName };
+    if (useExistingTarget && apiModule.connectionId && apiModule.connectionId !== target.id) {
+      // API modules in an export may carry an installation-specific MDM id.
+      // Point them at the Enterprise-provided MDM connection before publishing.
+      modulePatch.connectionId = target.id;
+      modulePatch.connectionName = target.name;
+    }
     await request(modulePatchPath, {
       method: "PATCH",
-      body: { id: module.id, status: "active", tableName: module.tableName },
+      body: modulePatch,
     });
   }
   log(`post-processing verified ${patchedIds.size} MongoDB connection(s) and published ${importedModules.length} API module(s)`);

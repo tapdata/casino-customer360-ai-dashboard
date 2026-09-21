@@ -8,7 +8,7 @@
 
 清除了凭据字段、账号邮箱、原 MongoDB 地址、指定运行节点、同步位点与运行指标；连接使用 `demo.invalid` 占位地址。记录 ID 保留以维持包内关联，不表示目的实例的实际 ID。API 字段、路径、集合名和任务 DAG 保持原导出定义。
 
-这些包不能作为已配置好的连接直接运行。使用 `.env.external` 配置目标 Source 和 MDM URI，再运行 `scripts/external-tapdata-onboard.sh`；现有导入器会导入后替换连接并启动任务。导入接口仍须在目标 TapData 版本验证。
+这些包不能作为已配置好的连接直接运行。使用 `.env.external` 配置目标 Source URI；MDM 连接由 TapData Enterprise 提供，安装器按名称 `MDM` 查找并复用，再运行 `scripts/external-tapdata-onboard.sh`。导入接口仍须在目标 TapData 版本验证。
 
 更新原始导出后，在项目根目录运行：
 
