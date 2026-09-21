@@ -52,7 +52,9 @@ yarn-error.log*
 /runtime/
 
 # generated demo artifacts and local working folders
-/artifacts/
+/artifacts/*
+!/artifacts/
+!/artifacts/tapdata-ai-scenario-runbook.md
 /.docx-qa/
 /.presentation-build-ai-loyalty/
 /.presentation-build-oracle-mssql-pg-ai/
