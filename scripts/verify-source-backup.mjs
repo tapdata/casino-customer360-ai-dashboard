@@ -16,7 +16,13 @@ export async function verifyBackup(root) {
   }
   return { database, sha256: expected, collections: manifest.collections.length, documents: manifest.collections.reduce((sum, c) => sum + c.count, 0), writesEnabled: false };
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+let invokedDirectly = false;
+try {
+  invokedDirectly = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+} catch {
+  invokedDirectly = false;
+}
+if (invokedDirectly) {
   verifyBackup(resolve(process.argv[2] || 'secrets/mongo-source'))
     .then(result => console.log(JSON.stringify(result, null, 2)))
     .catch(() => { console.error('Backup preparation failed: provide the private archive, archive.sha256 and restore-manifest.json in secrets/mongo-source'); process.exitCode = 1; });

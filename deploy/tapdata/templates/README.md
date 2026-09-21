@@ -17,4 +17,4 @@ node scripts/prepare-tapdata-templates.mjs
 node --test tests/tapdata-templates.test.mjs
 ```
 
-原始包留在被 Git 忽略的 `deploy/tapdata/exports/`，不应强制加入 Git。模板不包含 MongoDB 演示数据、AI 密钥、客户配置或 TapData 安装程序。
+原始包留在被 Git 忽略的 `deploy/tapdata/exports/`，不应强制加入 Git。MongoDB 演示数据已放在仓库的 `seed/demo/`，但模板不包含 AI 密钥、客户配置或 TapData 安装程序。

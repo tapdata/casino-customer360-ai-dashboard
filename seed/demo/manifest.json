@@ -1,0 +1,169 @@
+{
+  "format": "demo-ejson-v1",
+  "database": "tapdata_casino_marketing",
+  "sourceSha256": "cafba26d6765b99c16ec1311e6d12d326159234372f765d02241e97499ec3823",
+  "anonymized": true,
+  "collections": [
+    {
+      "name": "responsible_play_cases_ai_ready",
+      "count": 71,
+      "file": "responsible_play_cases_ai_ready.ejson.gz",
+      "sha256": "aea30f5bf427cad8148119f78d6e56b82817e45748b4ebcad218650c807d47c9",
+      "indexes": []
+    },
+    {
+      "name": "patron_profiles",
+      "count": 1038,
+      "file": "patron_profiles.ejson.gz",
+      "sha256": "81db7c0e543d8de6b356cede39244cee2b4f51d150a487a16777756371c275e3",
+      "indexes": []
+    },
+    {
+      "name": "ai_offer_approval_audit_src",
+      "count": 20,
+      "file": "ai_offer_approval_audit_src.ejson.gz",
+      "sha256": "99c91b38cc1fad3710f423b23c90d846b482481ffae2b443925f5b755eefad90",
+      "indexes": []
+    },
+    {
+      "name": "gaming_table_state_history",
+      "count": 83233,
+      "file": "gaming_table_state_history.ejson.gz",
+      "sha256": "02e5d6cc8590230d888b158541daf2199928b757f78ae8100c5722dd4a9e5708",
+      "indexes": []
+    },
+    {
+      "name": "ai_chat_messages_src",
+      "count": 30,
+      "file": "ai_chat_messages_src.ejson.gz",
+      "sha256": "34982c7a154ae6aedaaa8a90b114674be29a5bb2b6e96d165631e376c7e2784a",
+      "indexes": []
+    },
+    {
+      "name": "ops_patron_alerts_ai_ready",
+      "count": 71,
+      "file": "ops_patron_alerts_ai_ready.ejson.gz",
+      "sha256": "69cd41cecdb4a91e6899839c74727f0f2570a496a4c24707b6b751bb9160707f",
+      "indexes": []
+    },
+    {
+      "name": "gaming_table_state",
+      "count": 30,
+      "file": "gaming_table_state.ejson.gz",
+      "sha256": "940320707247aa829d7b6827f56fe07af0f6a37f34dd4ad5d23e4f86a0f5ee42",
+      "indexes": []
+    },
+    {
+      "name": "gaming_realtime_decision_signals_ai_ready",
+      "count": 74,
+      "file": "gaming_realtime_decision_signals_ai_ready.ejson.gz",
+      "sha256": "5fdb8c2ef4eeaf2dc7c4945ea147ac5784599477eb6bb91c9a71e81bb96e8fac",
+      "indexes": []
+    },
+    {
+      "name": "host_assignments_ai_ready",
+      "count": 74,
+      "file": "host_assignments_ai_ready.ejson.gz",
+      "sha256": "d40fe267de18834651a481c248fa63ece275950c3c7b83d4b94386be9a74d2cb",
+      "indexes": []
+    },
+    {
+      "name": "patron_activity_events_ai_ready",
+      "count": 118,
+      "file": "patron_activity_events_ai_ready.ejson.gz",
+      "sha256": "84cf5897492c312b3d4d5dbd94ecfa5eced50a437b5776e5361a896557b80631",
+      "indexes": []
+    },
+    {
+      "name": "pr_agent_profiles",
+      "count": 15,
+      "file": "pr_agent_profiles.ejson.gz",
+      "sha256": "577db3ed3e090da6211d431e7b8465eeff01e8ca772e510643812ad5b8f72b65",
+      "indexes": []
+    },
+    {
+      "name": "patron_table_sessions",
+      "count": 1040,
+      "file": "patron_table_sessions.ejson.gz",
+      "sha256": "adcac280879c28a846e6c0203a5254d1342b0f8138d891b4840c147dc2b85f7a",
+      "indexes": []
+    },
+    {
+      "name": "gaming_table_minbet_audit",
+      "count": 18,
+      "file": "gaming_table_minbet_audit.ejson.gz",
+      "sha256": "0d6ef934f4f4dad3969b600e4fdc6a1234f7864ecdd080cd55c3f5f28b2369bc",
+      "indexes": []
+    },
+    {
+      "name": "gaming_player_round_bets",
+      "count": 42228,
+      "file": "gaming_player_round_bets.ejson.gz",
+      "sha256": "a54fcc0fe715ab2315ef07aa5eaa4fdc6700ba819be1fa82f7d646f8ce785940",
+      "indexes": []
+    },
+    {
+      "name": "patron_interaction_history_ai_ready",
+      "count": 74,
+      "file": "patron_interaction_history_ai_ready.ejson.gz",
+      "sha256": "199d561ec0875cf57609cc613f3e2fff6d31cc5c29023afe89cf7d603c740b40",
+      "indexes": []
+    },
+    {
+      "name": "ai_chat_sessions_src",
+      "count": 15,
+      "file": "ai_chat_sessions_src.ejson.gz",
+      "sha256": "fb352ce1e93dfebfe78c7c8335f0ad88814aa17b742476f7beaaaa071a4e3a61",
+      "indexes": []
+    },
+    {
+      "name": "marketing_campaign_runs",
+      "count": 15,
+      "file": "marketing_campaign_runs.ejson.gz",
+      "sha256": "3305a065fa6d7c7f54a8d1fd5dc96f53d57a511e7bd07edfdb4164e5a51256eb",
+      "indexes": []
+    },
+    {
+      "name": "ops_alert_rules",
+      "count": 16,
+      "file": "ops_alert_rules.ejson.gz",
+      "sha256": "9cc8bb9898e742b917743bb819233bac8733391c186438e3f9709e1207d2ef11",
+      "indexes": []
+    },
+    {
+      "name": "gaming_table_round_counters",
+      "count": 60,
+      "file": "gaming_table_round_counters.ejson.gz",
+      "sha256": "2d7dc911fd1d92c411ddbfe412c2e7a603f372d00d7c3ac453c5bd32f1b54c9e",
+      "indexes": []
+    },
+    {
+      "name": "ai_patron_analysis_reports_src",
+      "count": 20,
+      "file": "ai_patron_analysis_reports_src.ejson.gz",
+      "sha256": "818f3885b6f43367121932a78adc5729999d60d0f6a9834b395e15c4666746ef",
+      "indexes": []
+    },
+    {
+      "name": "gaming_table_minbet_recommendations",
+      "count": 18,
+      "file": "gaming_table_minbet_recommendations.ejson.gz",
+      "sha256": "0effb69c6f9044f0baf64212ae8f9b76a961b88726514d618b8dffd4c5e59ffc",
+      "indexes": []
+    },
+    {
+      "name": "ai_offer_recommendations_src",
+      "count": 72,
+      "file": "ai_offer_recommendations_src.ejson.gz",
+      "sha256": "012459aea4ff79c66ff58a4328135e25306b735d785238d36965f50c6c3b06dd",
+      "indexes": []
+    },
+    {
+      "name": "offer_catalog",
+      "count": 18,
+      "file": "offer_catalog.ejson.gz",
+      "sha256": "a9fa40dafeec394360839342a85a219223ea87b546ba25bc0be657862362f36f",
+      "indexes": []
+    }
+  ]
+}

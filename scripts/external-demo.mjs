@@ -18,7 +18,7 @@ function run(command, args, env, label) {
 }
 function config() {
   const supplied = parseEnv(readFileSync(configPath, 'utf8'));
-  const env = { ...process.env, ...supplied };
+  const env = { ...process.env, ...supplied, PATH: `${dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}` };
   for (const key of ['TAPDATA_IMPORT_API_BASE_URL', 'TAPDATA_API_BASE_URL', 'TAPDATA_IMPORT_SOURCE_MONGODB_URI', 'TAPDATA_IMPORT_TARGET_MONGODB_URI', 'MONGO_AUDIT_URI', 'AI_PANEL_PUBLIC_HOST']) {
     if (!supplied[key] || /[<>]/.test(supplied[key])) throw new Error(`Configure ${key}`);
   }
@@ -36,7 +36,7 @@ function config() {
     MONGO_SNAPSHOT_DB: supplied.MONGO_SNAPSHOT_DB || supplied.MONGO_AUDIT_DB || 'marketing_demo',
     TAPDATA_IMPORT_ROOT: resolve(root, supplied.TAPDATA_IMPORT_ROOT || 'deploy/tapdata/templates'),
     TAPDATA_IMPORT_STATE_DIR: join(state, 'import'),
-    SOURCE_RESTORE_BACKUP_DIR: resolve(root, supplied.SOURCE_RESTORE_BACKUP_DIR || 'secrets/mongo-source'),
+    SOURCE_RESTORE_BACKUP_DIR: resolve(root, supplied.SOURCE_RESTORE_BACKUP_DIR || 'seed/demo'),
     SOURCE_RESTORE_URI: supplied.TAPDATA_IMPORT_SOURCE_MONGODB_URI,
     SOURCE_RESTORE_ALLOW_REMOTE: 'true',
     SOURCE_MONGO_URI: supplied.TAPDATA_IMPORT_SOURCE_MONGODB_URI,
@@ -69,12 +69,16 @@ async function preflight(env) {
   const body = await response.json();
   if (body.error || (body.code !== undefined && !['ok', 'OK', 0, 200, '200'].includes(body.code))) throw new Error('TapData manager rejected preflight');
   if (env.TAPDATA_IMPORT_RESTORE_SOURCE !== 'false') {
-    for (const executable of ['mongosh', 'mongorestore']) {
-      const check = spawnSync(executable, ['--version'], { stdio: 'ignore' });
-      if (check.status !== 0) throw new Error(`Install ${executable} first`);
+    if (existsSync(join(env.SOURCE_RESTORE_BACKUP_DIR, 'manifest.json'))) {
+      const { loadSeed } = await import('./demo-seed.mjs');
+      loadSeed(env.SOURCE_RESTORE_BACKUP_DIR);
+    } else {
+      for (const executable of ['mongosh', 'mongorestore']) {
+        if (spawnSync(executable, ['--version'], { stdio: 'ignore' }).status !== 0) throw new Error(`Legacy archive requires ${executable}`);
+      }
+      const { verifyBackup } = await import('./verify-source-backup.mjs');
+      await verifyBackup(env.SOURCE_RESTORE_BACKUP_DIR);
     }
-    const { verifyBackup } = await import('./verify-source-backup.mjs');
-    await verifyBackup(env.SOURCE_RESTORE_BACKUP_DIR);
   }
   run(process.execPath, ['scripts/tapdata-import.mjs', 'prepare'], env, 'Export validation');
   log('Preflight passed');
@@ -163,7 +167,10 @@ async function main() {
   // Build before writing to the destination services.
   if (!existsSync(join(root, '.next/BUILD_ID'))) run('npm', ['run', 'build'], env);
   if (!previous) {
-    if (env.TAPDATA_IMPORT_RESTORE_SOURCE !== 'false') run('mongosh', ['--nodb', '--quiet', 'scripts/mongo-source-restore.cjs'], env, 'Source restore');
+    if (env.TAPDATA_IMPORT_RESTORE_SOURCE !== 'false') {
+      if (existsSync(join(env.SOURCE_RESTORE_BACKUP_DIR, 'manifest.json'))) run(process.execPath, ['scripts/demo-seed.mjs', 'restore'], env, 'Demo source restore');
+      else run('mongosh', ['--nodb', '--quiet', 'scripts/mongo-source-restore.cjs'], env, 'Source restore');
+    }
     writeFileSync(checkpoint, JSON.stringify({ fingerprint, phase: 'importing' }), { mode: 0o600 });
     run(process.execPath, ['scripts/tapdata-import.mjs', 'api'], env, 'TapData import');
     writeFileSync(checkpoint, JSON.stringify({ fingerprint, phase: 'imported' }), { mode: 0o600 });
