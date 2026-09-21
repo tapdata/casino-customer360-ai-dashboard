@@ -7,7 +7,7 @@ const { spawnSync } = require('node:child_process');
 
 async function restore() {
   const database = 'tapdata_casino_marketing';
-  const root = '/backup';
+  const root = process.env.SOURCE_RESTORE_BACKUP_DIR || '/backup';
   const archive = `${root}/${database}.archive.gz`;
   const expected = fs.readFileSync(`${root}/archive.sha256`, 'utf8').trim().split(/\s+/)[0];
   if (!/^[a-f0-9]{64}$/.test(expected)) throw new Error('Invalid archive checksum');

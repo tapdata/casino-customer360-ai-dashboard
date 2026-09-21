@@ -1,3 +1,5 @@
+> **已有 TapData 企业版的演示迁移**：使用 [EXTERNAL_DEMO.md](EXTERNAL_DEMO.md) 中的原生部署入口，填写 `.env.external` 后自动恢复 MongoDB 数据、导入任务/API，并启动 AI 面板及持续造数据。无需 Docker，面板默认端口 3000。下方 Docker 说明属于历史可选方案。
+
 # AI Loyalty Engine Command Center
 
 An international demo application for casino customer intelligence, real-time operations, and governed next-best-action.

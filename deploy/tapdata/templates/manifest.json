@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "description": "Sanitized demo templates; destination credentials are supplied at deployment.",
+  "packages": [
+    {
+      "file": "tasks/TapData_CDC_Patron_Table_Sessions_To_MongoDB-20260915.json.gz",
+      "sha256": "c1822e8f893aff21da768e61aba85428cf20f1b6131d167c9d552007fc1481f5",
+      "records": {
+        "Task": 1,
+        "MetadataInstances": 48,
+        "Connections": 2
+      }
+    },
+    {
+      "file": "apis/module_batch-20260915.json.gz",
+      "sha256": "28b073bd422a5c04a9ad75932401a23d19499cc4c00ed23a939fc071c578146d",
+      "records": {
+        "Modules": 23,
+        "MetadataInstances": 23,
+        "Connections": 23
+      }
+    }
+  ]
+}
