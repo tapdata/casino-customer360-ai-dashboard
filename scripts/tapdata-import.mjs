@@ -11,9 +11,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { tmpdir } from "node:os";
 import { MongoClient } from "mongodb";
 
 const env = process.env;
@@ -391,6 +392,35 @@ async function uploadExport(path, filePath, fieldName, extraFields) {
   return request(path, { method: "POST", form });
 }
 
+function replaceExactStrings(value, ids, targetId) {
+  if (typeof value === "string") return ids.has(value) ? targetId : value;
+  if (Array.isArray(value)) return value.map((item) => replaceExactStrings(item, ids, targetId));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceExactStrings(item, ids, targetId)]));
+  return value;
+}
+
+function remapExistingTargetExport(filePath, targetName, targetId, tempDir) {
+  let bytes = readFileSync(filePath);
+  const compressed = filePath.endsWith(".gz");
+  if (compressed) bytes = gunzipSync(bytes);
+  const records = JSON.parse(bytes.toString("utf8"));
+  const list = Array.isArray(records) ? records : [records];
+  const targetIds = new Set();
+  for (const record of list) {
+    if (record?.collectionName !== "Connections") continue;
+    const body = parseJsonValue(record.json);
+    if (body?.name === targetName && typeof body.id === "string") targetIds.add(body.id);
+  }
+  if (targetIds.size === 0) throw new Error(`export does not contain the ${targetName} connection`);
+  const remapped = list.map((record) => ({
+    ...record,
+    json: JSON.stringify(replaceExactStrings(parseJsonValue(record.json), targetIds, targetId)),
+  }));
+  const output = join(tempDir, basename(filePath));
+  writeFileSync(output, compressed ? gzipSync(JSON.stringify(remapped)) : JSON.stringify(remapped));
+  return output;
+}
+
 async function runApiImport(connectionPath, taskPath, apiPath) {
   const connectionPathApi = env.TAPDATA_CONNECTION_IMPORT_PATH;
   const taskPathApi = env.TAPDATA_TASK_IMPORT_PATH || "/api/Task/batch/import";
@@ -412,6 +442,19 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
   const connectionFields = parseFormFields(env.TAPDATA_IMPORT_CONNECTION_FORM_FIELDS_JSON, "TAPDATA_IMPORT_CONNECTION_FORM_FIELDS_JSON");
   const taskFields = parseFormFields(env.TAPDATA_IMPORT_TASK_FORM_FIELDS_JSON, "TAPDATA_IMPORT_TASK_FORM_FIELDS_JSON");
   const commonFields = parseFormFields(env.TAPDATA_IMPORT_FORM_FIELDS_JSON, "TAPDATA_IMPORT_FORM_FIELDS_JSON");
+  let uploadTaskPath = taskPath;
+  let uploadApiPath = apiPath;
+  let remapDir;
+  if (asBool(env.TAPDATA_IMPORT_USE_EXISTING_TARGET)) {
+    const connectionListPath = env.TAPDATA_CONNECTION_LIST_PATH || "/api/Connections";
+    const connectionResult = await request(`${connectionListPath}${connectionListPath.includes("?") ? "&" : "?"}limit=1000`);
+    const existingTarget = listItems(connectionResult, "connection").find((connection) => connection.name === (env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM"));
+    if (!existingTarget?.id) throw new Error("TapData Enterprise MDM connection was not found");
+    remapDir = mkdtempSync(join(tmpdir(), "tapdata-existing-mdm-"));
+    uploadTaskPath = remapExistingTargetExport(taskPath, env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM", existingTarget.id, remapDir);
+    uploadApiPath = remapExistingTargetExport(apiPath, env.TAPDATA_IMPORT_TARGET_CONNECTION_NAME || "MDM", existingTarget.id, remapDir);
+    log("prepared task and API imports to reuse the existing TapData MDM connection");
+  }
   if (connectionPathApi && connectionPath) {
     if (env.TAPDATA_SOURCE_MONGODB_URI) connectionFields[env.TAPDATA_IMPORT_URI_FIELD] = env.TAPDATA_SOURCE_MONGODB_URI;
     log("uploading connection export (credentials are not printed)");
@@ -429,7 +472,7 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
   log("uploading task export after connection import");
   const taskResult = await uploadExport(
     taskPathApi,
-    taskPath,
+    uploadTaskPath,
     "file",
     {
       ...commonFields,
@@ -444,7 +487,7 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
   log("uploading API module export");
   const apiResult = await uploadExport(
     apiPathApi,
-    apiPath,
+    uploadApiPath,
     "file",
     {
       type: env.TAPDATA_API_IMPORT_TYPE || "Modules",
@@ -453,6 +496,7 @@ async function runApiImport(connectionPath, taskPath, apiPath) {
     },
   );
   log(`API module import accepted (HTTP ${apiResult.status})`);
+  if (remapDir) rmSync(remapDir, { recursive: true, force: true });
 
   if (env.TAPDATA_CONNECTION_LIST_PATH) {
     const result = await request(env.TAPDATA_CONNECTION_LIST_PATH);
