@@ -14,7 +14,18 @@ MongoDB 源库须支持事务与 CDC（副本集或分片集群）。准备空�
 
 ## 同事的操作
 
-同事可以直接让安装器引导填写配置；也可以先复制 `.env.external.example` 为 `.env.external` 手动填写。认证信息仅写在服务器上的配置文件中，密码中的特殊字符需按 MongoDB URI 规则编码。
+同事可以直接让安装器引导填写配置；也可以先复制 `.env.external.example` 为 `.env.external` 手动填写。向导已经预填常用默认值，直接按 Enter 即可确认：TapData 管理端/API Server 默认 `127.0.0.1:3030/3080`，MongoDB 默认本机 `27017` 的副本集，源库名固定为 `tapdata_casino_marketing`，面板状态库名固定为 `marketing_demo`，面板端口默认 `3000`，AI 默认 DeepSeek。Token、OAuth Secret、MongoDB 账号密码和 AI Key 不提供默认值，仍需输入。
+
+如果 TapData 或 MongoDB 在另一台服务器，可以在执行前设置默认主机，之后仍然按 Enter：
+
+```bash
+sudo env DEMO_TAPDATA_HOST=tapdata.example.internal \
+  DEMO_MONGO_HOST=mongo.example.internal \
+  DEMO_PUBLIC_HOST=demo.example.internal \
+  bash scripts/install-external.sh
+```
+
+认证信息仅写在服务器上的配置文件中，密码中的特殊字符需按 MongoDB URI 规则编码。
 
 `AI_PANEL_PORT` 默认为 `3000`，可改成其他未占用端口。`AI_PANEL_PUBLIC_HOST` 填可访问的服务器 IP 或域名，不含协议和端口。服务器防火墙/安全组需允许该端口；程序不会自动修改云安全组。
 

@@ -5,6 +5,24 @@ import { parseEnv } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 
+export function wizardDefaults(environment = process.env) {
+  const tapdataHost = environment.DEMO_TAPDATA_HOST || '127.0.0.1';
+  const mongoHost = environment.DEMO_MONGO_HOST || tapdataHost;
+  const publicHost = environment.DEMO_PUBLIC_HOST || '127.0.0.1';
+  return {
+    tapdataManagerUrl: `http://${tapdataHost}:3030`,
+    tapdataApiUrl: `http://${tapdataHost}:3080`,
+    tokenAuth: 'token',
+    sourceMongoUri: `mongodb://${mongoHost}:27017/tapdata_casino_marketing?replicaSet=rs1`,
+    panelMongoUri: `mongodb://${mongoHost}:27017/marketing_demo?replicaSet=rs1`,
+    publicHost,
+    panelPort: '3000',
+    aiProvider: 'deepseek',
+    aiModel: 'deepseek-chat',
+    aiBaseUrl: 'https://api.deepseek.com',
+  };
+}
+
 export function envText(config) {
   return Object.entries(config).map(([key, value]) => {
     const text = String(value);
@@ -26,9 +44,10 @@ async function main() {
   const output = new Writable({ write(chunk, encoding, done) { if (!muted) process.stdout.write(chunk, encoding); done(); } });
   const rl = createInterface({ input: process.stdin, output, terminal: true });
   const config = parseEnv(readFileSync(new URL('../.env.external.example', import.meta.url), 'utf8'));
+  const defaults = wizardDefaults();
   async function ask(label, fallback = '', secret = false, validate = () => true) {
     for (;;) {
-      process.stdout.write(`${label}${fallback ? (secret ? ' [回车使用同一 MongoDB 服务器]' : ` [${fallback}]`) : ''}: `);
+      process.stdout.write(`${label}${fallback ? (secret ? ' [按 Enter 使用默认值]' : ` [${fallback}]`) : ''}: `);
       muted = secret;
       let answer;
       try { answer = (await rl.question('')).trim() || fallback; }
@@ -41,11 +60,11 @@ async function main() {
   const mongo = value => { try { mongoDatabase(value, 'test'); return true; } catch { return false; } };
   try {
     console.log('首次配置：凭据输入不回显，仅保存到本机权限为 0600 的配置文件。');
-    config.TAPDATA_IMPORT_API_BASE_URL = await ask('TapData 管理端 URL', '', false, http);
+    config.TAPDATA_IMPORT_API_BASE_URL = await ask('TapData 管理端 URL', defaults.tapdataManagerUrl, false, http);
     const api = new URL(config.TAPDATA_IMPORT_API_BASE_URL); api.port = '3080';
-    config.TAPDATA_API_BASE_URL = await ask('TapData API Server URL', api.origin, false, http);
+    config.TAPDATA_API_BASE_URL = await ask('TapData API Server URL', api.origin || defaults.tapdataApiUrl, false, http);
     config.TAPDATA_IMPORT_TOKEN = await ask('管理端 access token', '', true);
-    const auth = await ask('API 认证方式：token 或 oauth', 'token', false, v => ['token', 'oauth'].includes(v));
+    const auth = await ask('API 认证方式：token 或 oauth', defaults.tokenAuth, false, v => ['token', 'oauth'].includes(v));
     if (auth === 'token') {
       config.TAPDATA_ACCESS_TOKEN = await ask('已发布 API 的 access token', '', true);
       config.TAPDATA_TOKEN_URL = '';
@@ -54,13 +73,15 @@ async function main() {
       config.TAPDATA_CLIENT_ID = await ask('OAuth client ID');
       config.TAPDATA_CLIENT_SECRET = await ask('OAuth client secret', '', true);
     }
-    config.TAPDATA_IMPORT_SOURCE_MONGODB_URI = mongoDatabase(await ask('源 MongoDB 完整 URI（含认证与副本集参数）', '', true, mongo), 'tapdata_casino_marketing');
-    config.MONGO_AUDIT_URI = mongoDatabase(await ask('面板状态 MongoDB URI', mongoDatabase(config.TAPDATA_IMPORT_SOURCE_MONGODB_URI, 'marketing_demo'), true, mongo), 'marketing_demo');
-    config.AI_PANEL_PUBLIC_HOST = await ask('面板服务器 IP 或域名', '', false, v => /^[a-zA-Z0-9.-]+$/.test(v));
-    config.AI_PANEL_PORT = await ask('面板端口', '3000', false, v => /^\d+$/.test(v) && Number(v) >= 1024 && Number(v) <= 65535);
-    config.AI_PROVIDER = await ask('AI 提供商：deepseek 或 openai', 'deepseek', false, v => ['deepseek', 'openai'].includes(v));
-    config.AI_MODEL = await ask('模型名称', config.AI_PROVIDER === 'deepseek' ? 'deepseek-chat' : 'gpt-4.1-mini');
-    config.AI_BASE_URL = await ask('AI API Base URL', config.AI_PROVIDER === 'deepseek' ? 'https://api.deepseek.com' : 'https://api.openai.com', false, http);
+    config.TAPDATA_IMPORT_SOURCE_MONGODB_URI = mongoDatabase(await ask('源 MongoDB 完整 URI（含认证与副本集参数）', defaults.sourceMongoUri, true, mongo), 'tapdata_casino_marketing');
+    config.MONGO_AUDIT_URI = mongoDatabase(await ask('面板状态 MongoDB URI', defaults.panelMongoUri, true, mongo), 'marketing_demo');
+    config.AI_PANEL_PUBLIC_HOST = await ask('面板服务器 IP 或域名', defaults.publicHost, false, v => /^[a-zA-Z0-9.-]+$/.test(v));
+    config.AI_PANEL_PORT = await ask('面板端口', defaults.panelPort, false, v => /^\d+$/.test(v) && Number(v) >= 1024 && Number(v) <= 65535);
+    config.AI_PROVIDER = await ask('AI 提供商：deepseek 或 openai', defaults.aiProvider, false, v => ['deepseek', 'openai'].includes(v));
+    const modelDefault = config.AI_PROVIDER === 'deepseek' ? defaults.aiModel : 'gpt-4.1-mini';
+    const baseUrlDefault = config.AI_PROVIDER === 'deepseek' ? defaults.aiBaseUrl : 'https://api.openai.com';
+    config.AI_MODEL = await ask('模型名称', modelDefault);
+    config.AI_BASE_URL = await ask('AI API Base URL', baseUrlDefault, false, http);
     config[config.AI_PROVIDER === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'OPENAI_API_KEY'] = await ask('AI API key', '', true);
     writeFileSync(file, envText(config), { mode: 0o600, flag: 'wx' });
     console.log('配置已保存，继续自动安装。');
