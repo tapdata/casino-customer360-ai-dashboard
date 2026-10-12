@@ -68,6 +68,67 @@ The following values have no safe default and must be provided:
 
 Secrets are not printed and are saved only in `.env.external` with permission `0600`.
 
+### Example for the current cloud server
+
+For the current cloud server, the private `.env.external` can look like this. Replace every value in angle brackets with the real secret; do not commit this file.
+
+```dotenv
+AI_PANEL_PUBLIC_HOST=47.119.130.230
+AI_PANEL_PORT=3000
+AI_PROVIDER=deepseek
+AI_MODEL=deepseek-chat
+AI_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=<your-deepseek-api-key>
+
+TAPDATA_API_BASE_URL=http://47.119.130.230:3080
+TAPDATA_FIND_PATH_TEMPLATE=/api/v1/{collection}/find
+TAPDATA_TOKEN_URL=http://47.119.130.230:3030/oauth/token
+TAPDATA_CLIENT_ID=<your-oauth-client-id-if-used>
+TAPDATA_CLIENT_SECRET=<your-oauth-client-secret-if-used>
+TAPDATA_ACCESS_TOKEN=<your-published-api-token-if-used>
+TAPDATA_TOKEN_AUTH_METHOD=client_secret_post
+
+TAPDATA_IMPORT_API_BASE_URL=http://47.119.130.230:3030
+TAPDATA_IMPORT_TOKEN=<your-tapdata-manager-token>
+TAPDATA_IMPORT_MODE=api
+TAPDATA_IMPORT_POSTPROCESS=true
+TAPDATA_IMPORT_AUTOSTART=true
+TAPDATA_IMPORT_SKIP_EXISTING=true
+TAPDATA_TASK_START_METHOD=PUT
+TAPDATA_TASK_START_PATH_TEMPLATE=/api/Task/batchStart?taskIds={taskId}
+
+TAPDATA_IMPORT_SOURCE_MONGODB_URI=mongodb://<mongo-user>:<mongo-password>@47.119.130.230:27017/tapdata_casino_marketing?authSource=admin&replicaSet=rs1
+TAPDATA_IMPORT_SOURCE_MONGODB_DB=tapdata_casino_marketing
+TAPDATA_IMPORT_SOURCE_CONNECTION_NAME=MongoDB_Source
+TAPDATA_IMPORT_TARGET_CONNECTION_NAME=MDM
+TAPDATA_IMPORT_USE_EXISTING_TARGET=true
+TAPDATA_IMPORT_RESTORE_SOURCE=true
+
+MONGO_AUDIT_URI=mongodb://<mongo-user>:<mongo-password>@47.119.130.230:27017/marketing_demo?authSource=admin&replicaSet=rs1
+MONGO_AUDIT_DB=marketing_demo
+MONGO_SNAPSHOT_DB=marketing_demo
+
+FEEDER_ENABLED=true
+FEEDER_INTERVAL_MS=15000
+FEEDER_SESSION_UPDATES_PER_TICK=1
+FEEDER_BET_INCREMENT=500
+SOURCE_RESTORE_BACKUP_DIR=seed/demo
+TAPDATA_IMPORT_ROOT=deploy/tapdata/templates
+```
+
+Use either `TAPDATA_ACCESS_TOKEN` or the OAuth client fields. For token mode, leave the OAuth fields empty; for OAuth mode, leave `TAPDATA_ACCESS_TOKEN` empty. URL-encode special characters in the MongoDB password.
+
+To use the file instead of answering the wizard, create it before the first run:
+
+```bash
+cp .env.external.example .env.external
+chmod 600 .env.external
+# Edit .env.external and replace the placeholders above.
+bash run-demo.sh
+```
+
+When `.env.external` already exists, the installer uses it and does not ask the same questions again.
+
 ## After deployment
 
 The installer prints the panel URL. The default is:
