@@ -62,8 +62,13 @@ when either 10 hours have elapsed or 2,400 events have been written. The three
 source systems are written as one logical customer event:
 
 - Oracle: gaming account, ratings, table session, round/bet signals;
-- MSSQL: hotel stay, responsible-play case, host assignment, and alerts;
+- MSSQL (`casino_ops.dbo`): `hotel_stays`, `responsible_play_cases`,
+  `host_assignments`, and risk-only `ops_patron_alerts`;
 - PostgreSQL: identity link, patron profile, app/POS/offer signals.
+
+The MSSQL initialization/rebuild package also creates the static reference
+tables `room_inventory`, `pr_agent_profiles`, and `ops_alert_rules`. The
+continuous feeder does not rewrite those three tables on every cycle.
 
 ## 3. Parameter meaning
 
@@ -145,4 +150,3 @@ Check these in order:
 
 This feeder only writes the source databases. It does not start TapData,
 publish APIs, or start the AI panel.
-
