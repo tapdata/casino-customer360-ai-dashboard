@@ -45,9 +45,15 @@ async function main() {
   const rl = createInterface({ input: process.stdin, output, terminal: true });
   const config = parseEnv(readFileSync(new URL('../.env.external.example', import.meta.url), 'utf8'));
   const defaults = wizardDefaults();
+  let step = 0;
   async function ask(label, fallback = '', secret = false, validate = () => true) {
     for (;;) {
-      process.stdout.write(`${label}${fallback ? (secret ? ' [按 Enter 使用默认值]' : ` [${fallback}]`) : ''}: `);
+      step += 1;
+      const prompt = `${label}${fallback ? (secret ? ' [按 Enter 使用默认值]' : ` [${fallback}]`) : ''}: `;
+      // Write prompts to stderr as well as the normal status messages. Some
+      // SSH/sudo wrappers buffer stdout and make the wizard look frozen even
+      // though readline is correctly waiting for input.
+      process.stderr.write(`\n[${step}] ${prompt}`);
       muted = secret;
       let answer;
       try { answer = (await rl.question('')).trim() || fallback; }
