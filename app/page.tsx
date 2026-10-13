@@ -5,6 +5,7 @@ import CommandCenter from "./command-center";
 import { readLivePatronSnapshot, writeLivePatronSnapshot } from "./live-patron-cache";
 
 type Locale = "zh-Hans" | "zh-Hant" | "en";
+type DataMode = "demo" | "live";
 
 type ConfidenceInsight = {
   title: string;
@@ -1264,6 +1265,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState(scenarios[0].id);
   const [livePatrons, setLivePatrons] = useState<LivePatron[] | null>(null);
   const [liveSourceCounts, setLiveSourceCounts] = useState<LiveSourceCounts | null>(null);
+  const [liveDataMode, setLiveDataMode] = useState<DataMode>("live");
   const [liveDataError, setLiveDataError] = useState("");
   const [liveRefreshTick, setLiveRefreshTick] = useState(0);
   const [primaryView, setPrimaryView] = useState<"customers" | "operations">("operations");
@@ -1921,7 +1923,9 @@ export default function Home() {
           <span className="environment-pill"><i /> {t.localDemo}</span>
           <span className={liveDataError ? "data-pill error" : "data-pill live"}>
             {livePatrons
-              ? `${livePatrons.length} ${locale === "en" ? "live patrons" : locale === "zh-Hant" ? "位真實客戶" : "位真实客户"}`
+              ? `${livePatrons.length} ${liveDataMode === "demo"
+                ? (locale === "en" ? "demo patrons" : locale === "zh-Hant" ? "位演示客戶" : "位演示客户")
+                : (locale === "en" ? "live patrons" : locale === "zh-Hant" ? "位真實客戶" : "位真实客户")}`
               : liveDataError
                 ? (locale === "en" ? "Live data unavailable" : locale === "zh-Hant" ? "真實數據載入失敗" : "真实数据加载失败")
                 : (locale === "en" ? "Loading live patrons…" : locale === "zh-Hant" ? "正在載入真實客戶…" : "正在加载真实客户…")}
@@ -2441,12 +2445,13 @@ export default function Home() {
       </> : <CommandCenter
         locale={locale}
         patronId={snapshot.patronId}
-        onLivePatronsLoaded={(patrons, sourceCounts) => {
+        onLivePatronsLoaded={(patrons, sourceCounts, mode) => {
           // CommandCenter already filters empty/partial responses. Keep this
           // guard at the shell boundary as well so a future caller cannot
           // clear the global dashboard snapshot with a transient empty list.
           if (!patrons.length) return;
           setLivePatrons(patrons);
+          setLiveDataMode(mode || "live");
           if (sourceCounts) setLiveSourceCounts(sourceCounts);
           setLiveDataError("");
         }}

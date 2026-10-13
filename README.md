@@ -89,6 +89,7 @@ Key variables:
 - `AI_BASE_URL`: DeepSeek default is `https://api.deepseek.com`.
 - `LOCAL_AI_PROXY`: optional local-only proxy for development networks that need it.
 - `TAPDATA_API_BASE_URL`: TapData published API base URL.
+- `TAPDATA_DEMO_FALLBACK`: defaults to `true`, so the public demo keeps showing the built-in anonymized dataset when TapData is stopped; set it to `false` for live-only deployments.
 - `TAPDATA_FIND_PATH_TEMPLATE`: current MDM pattern, for example `/api/v1/{collection}/find`.
 - `TAPDATA_COLLECTION_MAP`: optional logical-name to published-service-name mapping.
 - `TAPDATA_TOKEN_URL`, `TAPDATA_CLIENT_ID`, `TAPDATA_CLIENT_SECRET`: OAuth2 Client Credentials used by the server.

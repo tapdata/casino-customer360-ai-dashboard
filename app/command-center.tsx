@@ -8,6 +8,7 @@ type Experience = "moment" | "floor" | "campaign" | "risk";
 type CommandView = "overview" | "floor" | "chat" | "customer" | "scenarios" | "simulate";
 
 type ChatSource = { collection: string; count: number };
+type DataMode = "demo" | "live";
 type ChatReply = {
   answer?: string;
   error?: string;
@@ -553,7 +554,7 @@ export default function CommandCenter({
   locale: Locale;
   patronId: string;
   onOpenDecision?: (patronId: string) => void;
-  onLivePatronsLoaded?: (patrons: LivePatron[], sourceCounts: SourceCounts | null) => void;
+  onLivePatronsLoaded?: (patrons: LivePatron[], sourceCounts: SourceCounts | null, mode?: DataMode) => void;
   journeyOverrides?: JourneyOverrides;
 }) {
   const [activeView, setActiveView] = useState<CommandView>("overview");
@@ -640,7 +641,7 @@ export default function CommandCenter({
         if (refreshSequenceRef.current === requestSequence) setDataError("");
         return;
       }
-      const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }>; fetchedAt?: string; cacheState?: "miss" | "fresh" | "stale" | "persisted" };
+      const result = await response.json() as { data?: LivePatron[]; sourceCounts?: SourceCounts; error?: string; warnings?: Array<{ collection: string; message: string }>; fetchedAt?: string; cacheState?: "miss" | "fresh" | "stale" | "persisted"; mode?: DataMode };
       if (!response.ok || !result.data) throw new Error(result.error || "Unable to load live data");
       if (refreshSequenceRef.current !== requestSequence) return;
       // An empty response is commonly a transient upstream timeout/partial
@@ -653,7 +654,7 @@ export default function CommandCenter({
       const nextPatrons = applyJourneyOverrides(result.data, journeyOverridesRef.current);
       setPatrons(nextPatrons);
       writeLivePatronSnapshot(nextPatrons, result.sourceCounts, result.fetchedAt);
-      livePatronsLoadedRef.current?.(nextPatrons, result.sourceCounts || null);
+      livePatronsLoadedRef.current?.(nextPatrons, result.sourceCounts || null, result.mode || "live");
       setSourceCounts(result.sourceCounts || null);
       setDataError("");
       setCacheState(result.cacheState || "miss");

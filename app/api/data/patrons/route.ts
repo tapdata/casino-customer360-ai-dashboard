@@ -2,6 +2,7 @@ import { MongoClient } from "mongodb";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { tapDataCollectionLabel, tapDataCollectionUrl } from "../../tapdata-collections";
+import { demoAlerts, demoInteractions, demoOffers, demoPatrons, demoSessions } from "../../ai/chat/demo-data";
 import { getTapDataConfig, type TapDataConfig } from "../../../lib/tapdata-config";
 
 type JsonRecord = Record<string, unknown>;
@@ -54,6 +55,7 @@ type LoadPatronsResult = {
   };
   errors: Array<{ collection: string; message: string }>;
   partial?: boolean;
+  mode?: "live" | "demo";
 };
 
 type PatronCache = {
@@ -74,6 +76,43 @@ function positiveEnvMs(name: string, fallback: number) {
 
 /** Keep the panel responsive while TapData refreshes a large snapshot. */
 const patronCacheFreshMs = () => positiveEnvMs("PATRONS_CACHE_FRESH_MS", 3_000);
+
+// The public demo remains useful when the customer's TapData server is
+// intentionally stopped. Set TAPDATA_DEMO_FALLBACK=false on a live-only
+// deployment when an upstream outage should be shown as an error instead.
+const demoFallbackEnabled = () => process.env.TAPDATA_DEMO_FALLBACK !== "false";
+
+function demoPatronSnapshot(reason = "TapData is unavailable; showing the built-in demo dataset."): LoadPatronsResult {
+  const sessionByPatron = new Map(demoSessions.map((session) => [session.patronId, session]));
+  return {
+    value: demoPatrons.map((patron) => {
+      const session = sessionByPatron.get(patron.patronId);
+      return {
+        ...patron,
+        activeSession: session ? {
+          tableId: session.tableId,
+          seatedAt: session.seatedAt,
+          lastActionAt: session.lastActionAt,
+          sessionBetAmount: session.sessionBetAmount,
+          currentStackEstimate: session.currentStackEstimate,
+          behaviorTags: session.behaviorTags,
+          isActive: session.isActive,
+        } : null,
+        activeRiskCount: patron.riskFlags.length ? 1 : 0,
+      };
+    }),
+    sourceCounts: {
+      patron_profiles: demoPatrons.length,
+      patron_table_sessions: demoSessions.length,
+      patron_risk_cases: demoAlerts.length,
+      offer_recommendations: demoOffers.length,
+      chat_messages: demoInteractions.length,
+    },
+    errors: [{ collection: "demo", message: reason }],
+    partial: false,
+    mode: "demo",
+  };
+}
 
 function snapshotMongoUri() {
   if (process.env.MONGO_SNAPSHOT_URI) return process.env.MONGO_SNAPSHOT_URI;
@@ -118,7 +157,7 @@ async function readPersistedSnapshot() {
   if (!collection) return null;
   try {
     const document = await collection.findOne({ _id: "live" });
-    if (!document || !document.result || !Array.isArray(document.result.value)) return null;
+    if (!document || !document.result || !Array.isArray(document.result.value) || document.result.value.length === 0) return null;
     // Ignore snapshots written by the pre-pagination loader when they contain
     // no sessions. They would otherwise keep the dashboard in a stale
     // "zero active patrons" state until a slow refresh eventually completes.
@@ -535,6 +574,7 @@ async function loadPatrons(requestedScanLimit?: number): Promise<LoadPatronsResu
     },
     errors,
     partial: scanLimit < Math.min(Math.max(configuredScanLimit, 50), 5000),
+    mode: "live",
   };
 }
 
@@ -549,6 +589,12 @@ async function cachedLoadPatrons() {
       "TapData patron snapshot timed out; retrying on the next refresh",
     )
       .then(async (result) => {
+        if (result.value.length === 0 && demoFallbackEnabled()) {
+          if (cachedLoad) return cachedLoad.result;
+          const fallback = demoPatronSnapshot("TapData returned no patron records; showing the built-in demo dataset.");
+          cachedLoad = { result: fallback, loadedAt: Date.now(), complete: true, version: 2 };
+          return fallback;
+        }
         // A transient upstream outage must not poison the in-memory cache with
         // an empty snapshot. Keep the last known-good data available so the
         // next request can render it while the shared refresh retries.
@@ -574,6 +620,13 @@ async function cachedLoadPatrons() {
         cachedLoad = { result: nextResult, loadedAt: Date.now(), complete: true, version: 2 };
         await writePersistedSnapshot(cachedLoad);
         return nextResult;
+      })
+      .catch((error) => {
+        if (!demoFallbackEnabled()) throw error;
+        if (cachedLoad) return cachedLoad.result;
+        const fallback = demoPatronSnapshot(error instanceof Error ? error.message : "TapData is unavailable; showing the built-in demo dataset.");
+        cachedLoad = { result: fallback, loadedAt: Date.now(), complete: true, version: 2 };
+        return fallback;
       })
       .finally(() => {
         inFlightLoad = null;
@@ -656,7 +709,7 @@ export async function GET(request: Request) {
       sourceCounts: result.sourceCounts,
       warnings: result.errors,
       partial: result.partial ?? false,
-      mode: "live",
+      mode: result.mode || "live",
       fetchedAt: new Date(loadedAt).toISOString(),
       servedAt: new Date().toISOString(),
       cacheState,
