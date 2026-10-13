@@ -1,5 +1,7 @@
 > **客户一键部署入口**：同事只需从 Git 拉取代码后执行 `bash run-demo.sh`，配置向导中的普通项可以一路按 Enter；程序会自动安装运行依赖、恢复 Git 中的匿名 MongoDB 数据、导入或复用任务/API，并启动 AI 面板。请先看 [CUSTOMER_QUICKSTART.md](CUSTOMER_QUICKSTART.md)。工程验收和外部部署细节见 [EXTERNAL_DEMO.md](EXTERNAL_DEMO.md)。无需 Docker，面板默认端口 3000。下方 Docker 说明属于历史可选方案。
 
+If TapData tasks and APIs have already been imported manually, use the panel-only path in [MANUAL_TAPDATA_PANEL_QUICKSTART_EN.md](MANUAL_TAPDATA_PANEL_QUICKSTART_EN.md). It clones the repository, creates a private `.env.local`, and starts the panel without running the importer or data feeder.
+
 # AI Loyalty Engine Command Center
 
 An international demo application for casino customer intelligence, real-time operations, and governed next-best-action.
