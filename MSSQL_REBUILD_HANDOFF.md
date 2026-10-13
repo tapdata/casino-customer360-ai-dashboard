@@ -20,15 +20,19 @@ The script creates `casino_ops` when it does not exist and creates any missing
 - `hotel_stays`
 - `responsible_play_cases`
 - `host_assignments`
-- `ops_patron_alerts`
 - `room_inventory`
 - `pr_agent_profiles`
 - `ops_alert_rules`
+- `host_assignments_ai_ready`
+- `responsible_play_cases_ai_ready`
+- `ops_patron_alerts_ai_ready`
 
-These names deliberately match the existing `generate_full_seed_15plus.mjs`
-and `realtime-source-feeder.mjs` contracts. The rebuild adds nullable
-compatibility columns where the feeder already supports them; it does not
-rename or remove any of the existing table names.
+These names match the nine-table MSSQL layout used by the current TapData
+demo. The three `*_ai_ready` tables carry the fields consumed by the direct
+CDC/API tasks (`pr_assignments`, `patron_risk_cases`, and `patron_alerts`).
+The legacy raw `ops_patron_alerts` table is not required by this nine-table
+layout; the continuous feeder supports either raw alerts or the AI-ready
+alert table when an older database still has the raw table.
 
 For each player found in the surviving Oracle accounts/sessions or PostgreSQL
 identity links/profiles, it derives:
@@ -135,11 +139,14 @@ SELECT name FROM sys.tables ORDER BY name;
 SELECT COUNT(*) AS hotel_stays FROM dbo.hotel_stays;
 SELECT COUNT(*) AS risk_cases FROM dbo.responsible_play_cases;
 SELECT COUNT(*) AS host_assignments FROM dbo.host_assignments;
-SELECT COUNT(*) AS alerts FROM dbo.ops_patron_alerts;
+SELECT COUNT(*) AS ai_ready_alerts FROM dbo.ops_patron_alerts_ai_ready;
 
 SELECT TOP (10) player_id, guest_id, status
 FROM dbo.responsible_play_cases
 WHERE case_id LIKE '%-REBUILT';
+
+SELECT COUNT(*) AS ai_ready_assignments FROM dbo.host_assignments_ai_ready;
+SELECT COUNT(*) AS ai_ready_risk_cases FROM dbo.responsible_play_cases_ai_ready;
 ```
 
 After the data is present, refresh the MSSQL connection model in TapData and

@@ -264,14 +264,69 @@ function buildRows(people) {
   return { hotel, risks, assignments, alerts };
 }
 
+function riskLevel(score) {
+  if (score >= 80) return "High";
+  if (score >= 50) return "Medium";
+  if (score > 0) return "Low";
+  return "Normal";
+}
+
+function buildAiReadyRows(rows) {
+  return {
+    assignments: rows.assignments.map((row) => ({
+      assignment_id: row.assignment_id,
+      patronId: `P${String(row.player_id).padStart(10, "0")}`,
+      prAgentId: row.host_id || row.pr_agent_id,
+      caseId: row.case_id,
+      status: row.status || row.assignment_status,
+      fitScore: row.fit_score,
+      active: row.active,
+      assignedAt: row.assigned_at,
+      acceptedAt: row.accepted_at ?? null,
+      completedAt: row.completed_at ?? null,
+      agentSnapshot: json({ name: row.host_name, source: "MSSQL.host_assignments" }),
+      updatedAt: row.updated_at,
+    })),
+    risks: rows.risks.map((row) => ({
+      case_id: row.case_id,
+      patronId: `P${String(row.player_id).padStart(10, "0")}`,
+      tableId: row.table_id,
+      riskType: row.risk_type,
+      riskScore: row.risk_score,
+      riskLevel: riskLevel(row.risk_score),
+      status: row.status,
+      reasoningAssessment: json({ summary: row.reason, source: "MSSQL.responsible_play_cases" }),
+      adminReview: json({ status: row.status, reviewedBy: "ADM-01" }),
+      timeline: json([{ node: "case_created", at: row.created_at.toISOString() }]),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+    alerts: rows.alerts.map((row) => ({
+      alert_id: row.alert_id,
+      patronId: `P${String(row.patron_source_player_id).padStart(10, "0")}`,
+      ruleId: row.rule_id,
+      ruleName: row.rule_name,
+      tableId: row.table_id,
+      status: row.status,
+      triggeredAt: row.triggered_at,
+      triggeredConditions: row.triggered_conditions_json,
+      patronSnapshot: row.patron_snapshot_json,
+      tableSnapshot: row.table_snapshot_json,
+      llmRationale: row.llm_rationale,
+    })),
+  };
+}
+
 const DDL = [
   `IF OBJECT_ID(N'dbo.hotel_stays', N'U') IS NULL CREATE TABLE dbo.hotel_stays (stay_id NVARCHAR(64) NOT NULL PRIMARY KEY, guest_id NVARCHAR(64) NULL, player_id NVARCHAR(64) NULL, passport_hash NVARCHAR(128) NULL, mobile_hash NVARCHAR(128) NULL, loyalty_card_no NVARCHAR(64) NULL, checkin_at DATETIME2 NULL, checkout_at DATETIME2 NULL, check_in_at DATETIME2 NULL, planned_check_out_at DATETIME2 NULL, room_type NVARCHAR(64) NULL, upgrade_eligible BIT NULL, late_checkout_eligible BIT NULL, status NVARCHAR(32) NULL, stay_status NVARCHAR(32) NULL, updated_at DATETIME2 NULL);`,
   `IF OBJECT_ID(N'dbo.responsible_play_cases', N'U') IS NULL CREATE TABLE dbo.responsible_play_cases (case_id NVARCHAR(64) NOT NULL PRIMARY KEY, guest_id NVARCHAR(64) NULL, player_id NVARCHAR(64) NULL, table_id NVARCHAR(64) NULL, risk_type NVARCHAR(64) NULL, risk_score INT NULL, status NVARCHAR(32) NULL, reason NVARCHAR(500) NULL, created_at DATETIME2 NULL, updated_at DATETIME2 NULL);`,
   `IF OBJECT_ID(N'dbo.host_assignments', N'U') IS NULL CREATE TABLE dbo.host_assignments (assignment_id NVARCHAR(64) NOT NULL PRIMARY KEY, guest_id NVARCHAR(64) NULL, player_id NVARCHAR(64) NULL, pr_agent_id NVARCHAR(64) NULL, host_id NVARCHAR(64) NULL, host_name NVARCHAR(120) NULL, case_id NVARCHAR(64) NULL, assignment_status NVARCHAR(32) NULL, status NVARCHAR(32) NULL, fit_score DECIMAL(6,2) NULL, active BIT NULL, last_contact_at DATETIME2 NULL, sla_due_at DATETIME2 NULL, assigned_at DATETIME2 NULL, accepted_at DATETIME2 NULL, completed_at DATETIME2 NULL, updated_at DATETIME2 NULL);`,
-  `IF OBJECT_ID(N'dbo.ops_patron_alerts', N'U') IS NULL CREATE TABLE dbo.ops_patron_alerts (alert_id NVARCHAR(64) NOT NULL PRIMARY KEY, rule_id NVARCHAR(64) NULL, rule_name NVARCHAR(160) NULL, patron_source_player_id NVARCHAR(64) NULL, guest_id NVARCHAR(64) NULL, table_id NVARCHAR(64) NULL, alert_title NVARCHAR(240) NULL, alert_message NVARCHAR(1000) NULL, severity NVARCHAR(32) NULL, triggered_conditions_json NVARCHAR(MAX) NULL, patron_snapshot_json NVARCHAR(MAX) NULL, table_snapshot_json NVARCHAR(MAX) NULL, status NVARCHAR(32) NULL, alert_status NVARCHAR(32) NULL, triggered_at DATETIME2 NULL, llm_rationale NVARCHAR(1000) NULL, created_at DATETIME2 NULL, closed_at DATETIME2 NULL);`,
   `IF OBJECT_ID(N'dbo.room_inventory', N'U') IS NULL CREATE TABLE dbo.room_inventory (inventory_id NVARCHAR(64) NOT NULL PRIMARY KEY, room_type NVARCHAR(64) NULL, available_count INT NULL, upgrade_cost_hkd DECIMAL(18,2) NULL, business_date DATE NULL, updated_at DATETIME2 NULL);`,
   `IF OBJECT_ID(N'dbo.pr_agent_profiles', N'U') IS NULL CREATE TABLE dbo.pr_agent_profiles (pr_agent_id NVARCHAR(64) NOT NULL PRIMARY KEY, agent_name NVARCHAR(120) NULL, preferred_languages NVARCHAR(300) NULL, preferred_tiers NVARCHAR(300) NULL, preferred_games NVARCHAR(300) NULL, specialty_tags NVARCHAR(300) NULL, max_active_patrons INT NULL, current_active_patrons INT NULL, active BIT NULL, last_assigned_at DATETIME2 NULL, created_at DATETIME2 NULL, updated_at DATETIME2 NULL);`,
   `IF OBJECT_ID(N'dbo.ops_alert_rules', N'U') IS NULL CREATE TABLE dbo.ops_alert_rules (rule_id NVARCHAR(64) NOT NULL PRIMARY KEY, name NVARCHAR(160) NULL, nl_description NVARCHAR(500) NULL, condition_logic NVARCHAR(32) NULL, conditions_json NVARCHAR(MAX) NULL, status NVARCHAR(32) NULL, total_triggered INT NULL, last_triggered_at DATETIME2 NULL, created_at DATETIME2 NULL);`,
+  `IF OBJECT_ID(N'dbo.host_assignments_ai_ready', N'U') IS NULL CREATE TABLE dbo.host_assignments_ai_ready (assignment_id NVARCHAR(64) NOT NULL PRIMARY KEY, patronId NVARCHAR(64) NULL, prAgentId NVARCHAR(64) NULL, caseId NVARCHAR(64) NULL, status NVARCHAR(32) NULL, fitScore DECIMAL(6,2) NULL, active BIT NULL, assignedAt DATETIME2 NULL, acceptedAt DATETIME2 NULL, completedAt DATETIME2 NULL, agentSnapshot NVARCHAR(MAX) NULL, updatedAt DATETIME2 NULL);`,
+  `IF OBJECT_ID(N'dbo.responsible_play_cases_ai_ready', N'U') IS NULL CREATE TABLE dbo.responsible_play_cases_ai_ready (case_id NVARCHAR(64) NOT NULL PRIMARY KEY, patronId NVARCHAR(64) NULL, tableId NVARCHAR(64) NULL, riskType NVARCHAR(64) NULL, riskScore INT NULL, riskLevel NVARCHAR(32) NULL, status NVARCHAR(32) NULL, reasoningAssessment NVARCHAR(MAX) NULL, adminReview NVARCHAR(MAX) NULL, timeline NVARCHAR(MAX) NULL, createdAt DATETIME2 NULL, updatedAt DATETIME2 NULL);`,
+  `IF OBJECT_ID(N'dbo.ops_patron_alerts_ai_ready', N'U') IS NULL CREATE TABLE dbo.ops_patron_alerts_ai_ready (alert_id NVARCHAR(64) NOT NULL PRIMARY KEY, patronId NVARCHAR(64) NULL, ruleId NVARCHAR(64) NULL, ruleName NVARCHAR(160) NULL, tableId NVARCHAR(64) NULL, status NVARCHAR(32) NULL, triggeredAt DATETIME2 NULL, triggeredConditions NVARCHAR(MAX) NULL, patronSnapshot NVARCHAR(MAX) NULL, tableSnapshot NVARCHAR(MAX) NULL, llmRationale NVARCHAR(1000) NULL);`,
 ];
 
 function sqlLiteral(value) {
@@ -296,6 +351,7 @@ function renderInsertStatements(table, primaryKey, rows) {
 }
 
 function renderSql(rows, statics) {
+  const aiReady = buildAiReadyRows(rows);
   const lines = [
     "-- Generated from the surviving Oracle and PostgreSQL demo sources.",
     "-- This file is a manual SQL script. It does not connect to or modify those source databases.",
@@ -315,7 +371,9 @@ function renderSql(rows, statics) {
     renderInsertStatements("hotel_stays", "stay_id", rows.hotel),
     renderInsertStatements("responsible_play_cases", "case_id", rows.risks),
     renderInsertStatements("host_assignments", "assignment_id", rows.assignments),
-    renderInsertStatements("ops_patron_alerts", "alert_id", rows.alerts),
+    renderInsertStatements("host_assignments_ai_ready", "assignment_id", aiReady.assignments),
+    renderInsertStatements("responsible_play_cases_ai_ready", "case_id", aiReady.risks),
+    renderInsertStatements("ops_patron_alerts_ai_ready", "alert_id", aiReady.alerts),
     "PRINT 'MSSQL casino_ops rebuild script completed.';",
     "GO",
   ];
@@ -411,8 +469,11 @@ async function main() {
     for (const row of rows.hotel) await upsert(pool, "hotel_stays", "stay_id", row, columnsCache);
     for (const row of rows.risks) await upsert(pool, "responsible_play_cases", "case_id", row, columnsCache);
     for (const row of rows.assignments) await upsert(pool, "host_assignments", "assignment_id", row, columnsCache);
-    for (const row of rows.alerts) await upsert(pool, "ops_patron_alerts", "alert_id", row, columnsCache);
-    console.log(JSON.stringify({ restored: { hotelStays: rows.hotel.length, riskCases: rows.risks.length, hostAssignments: rows.assignments.length, alerts: rows.alerts.length, roomInventory: statics.rooms.length, agents: statics.agents.length, alertRules: statics.rules.length }, note: "Only reconstructed demo keys were upserted; no source database was modified and no MSSQL table was dropped." }));
+    const aiReady = buildAiReadyRows(rows);
+    for (const row of aiReady.assignments) await upsert(pool, "host_assignments_ai_ready", "assignment_id", row, columnsCache);
+    for (const row of aiReady.risks) await upsert(pool, "responsible_play_cases_ai_ready", "case_id", row, columnsCache);
+    for (const row of aiReady.alerts) await upsert(pool, "ops_patron_alerts_ai_ready", "alert_id", row, columnsCache);
+    console.log(JSON.stringify({ restored: { hotelStays: rows.hotel.length, riskCases: rows.risks.length, hostAssignments: rows.assignments.length, aiReadyAssignments: aiReady.assignments.length, aiReadyRiskCases: aiReady.risks.length, aiReadyAlerts: aiReady.alerts.length, roomInventory: statics.rooms.length, agents: statics.agents.length, alertRules: statics.rules.length }, note: "Only reconstructed demo keys were upserted; no source database was modified and no MSSQL table was dropped." }));
   } finally {
     await pool.close();
   }

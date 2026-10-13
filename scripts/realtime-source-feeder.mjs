@@ -411,6 +411,16 @@ class PgSink {
     return cols;
   }
 
+  async tableExists(table) {
+    return (await this.columns(table)).size > 0;
+  }
+
+  async upsertIfPresent(table, pk, record) {
+    if (!(await this.tableExists(table))) return false;
+    await this.upsert(table, pk, record);
+    return true;
+  }
+
   async upsert(table, pk, record) {
     await this.ensureConnected();
     const available = await this.columns(table);
@@ -881,7 +891,7 @@ class MssqlSink {
       updated_at: person.created,
     });
     if (person.risky) {
-      await this.upsert("ops_patron_alerts", "alert_id", {
+      const rawAlert = {
         alert_id: `ALERT-${person.playerId}-ACTIVE`,
         patron_source_player_id: person.playerId,
         guest_id: person.guestId,
@@ -900,7 +910,77 @@ class MssqlSink {
         llm_rationale: "High wager velocity and sensitive behavior tags require administrator review before any offer can be sent.",
         created_at: person.created,
         closed_at: null,
-      });
+      };
+      const aiReadyAlert = {
+        alert_id: rawAlert.alert_id,
+        patronId: person.masterPlayerId,
+        ruleId: rawAlert.rule_id,
+        ruleName: rawAlert.rule_name,
+        tableId: rawAlert.table_id,
+        status: rawAlert.status,
+        triggeredAt: rawAlert.triggered_at,
+        triggeredConditions: rawAlert.triggered_conditions_json,
+        patronSnapshot: rawAlert.patron_snapshot_json,
+        tableSnapshot: rawAlert.table_snapshot_json,
+        llmRationale: rawAlert.llm_rationale,
+      };
+      const wroteRaw = await this.upsertIfPresent("ops_patron_alerts", "alert_id", rawAlert);
+      const wroteAiReady = await this.upsertIfPresent("ops_patron_alerts_ai_ready", "alert_id", aiReadyAlert);
+      if (!wroteRaw && !wroteAiReady) {
+        throw new Error("MSSQL requires ops_patron_alerts or ops_patron_alerts_ai_ready for risk alerts");
+      }
+    }
+  }
+
+  async closeOpenAlertsForPlayers(playerIds) {
+    const ids = playerIds.map(String).filter(Boolean);
+    if (!ids.length) return;
+    if (await this.tableExists("ops_patron_alerts")) {
+      const request = this.pool.request();
+      ids.forEach((playerId, index) => request.input(`raw${index}`, playerId));
+      await request.query(
+        `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
+         SET status = 'CLOSED'
+         WHERE patron_source_player_id IN (${ids.map((_, index) => `@raw${index}`).join(",")})
+           AND UPPER(status) = 'OPEN'`,
+      );
+    }
+    if (await this.tableExists("ops_patron_alerts_ai_ready")) {
+      const request = this.pool.request();
+      const patronIds = ids.map((playerId) => `P${pad(playerId, 10)}`);
+      patronIds.forEach((patronId, index) => request.input(`ready${index}`, patronId));
+      await request.query(
+        `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts_ai_ready")}
+         SET status = 'CLOSED'
+         WHERE patronId IN (${patronIds.map((_, index) => `@ready${index}`).join(",")})
+           AND UPPER(status) = 'OPEN'`,
+      );
+    }
+  }
+
+  async closeOpenAlertsForRange(range) {
+    if (!range) return;
+    if (await this.tableExists("ops_patron_alerts")) {
+      const request = this.pool.request();
+      request.input("startPlayerId", String(range.start));
+      request.input("endPlayerId", String(range.end));
+      await request.query(
+        `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
+         SET status = 'CLOSED'
+         WHERE TRY_CONVERT(INT, patron_source_player_id) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)
+           AND UPPER(status) = 'OPEN'`,
+      );
+    }
+    if (await this.tableExists("ops_patron_alerts_ai_ready")) {
+      const request = this.pool.request();
+      request.input("startPlayerId", String(range.start));
+      request.input("endPlayerId", String(range.end));
+      await request.query(
+        `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts_ai_ready")}
+         SET status = 'CLOSED'
+         WHERE TRY_CONVERT(INT, SUBSTRING(patronId, 2, 10)) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)
+           AND UPPER(status) = 'OPEN'`,
+      );
     }
   }
 
@@ -918,14 +998,7 @@ class MssqlSink {
          AND status = 'Active'`,
     );
 
-    const closeAlert = this.pool.request();
-    closeAlert.input("playerId", String(playerId));
-    await closeAlert.query(
-      `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
-       SET status = 'CLOSED'
-       WHERE patron_source_player_id = @playerId
-         AND status = 'OPEN'`,
-    );
+    await this.closeOpenAlertsForPlayers([playerId]);
   }
 
   async retirePlayerRange(range) {
@@ -942,14 +1015,7 @@ class MssqlSink {
        WHERE TRY_CONVERT(INT, player_id) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)`,
     );
 
-    const closeAlerts = this.pool.request();
-    closeAlerts.input("startPlayerId", String(range.start));
-    closeAlerts.input("endPlayerId", String(range.end));
-    await closeAlerts.query(
-      `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
-       SET status = 'CLOSED'
-       WHERE TRY_CONVERT(INT, patron_source_player_id) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)`,
-    );
+    await this.closeOpenAlertsForRange(range);
     console.log(`Closed MSSQL risk cases and alerts for player range ${range.start}-${range.end}.`);
   }
 
@@ -1079,14 +1145,7 @@ async function maintainRiskRatio(sinks) {
        AND UPPER(status) = 'ACTIVE'`,
   );
 
-  const closeAlertRequest = mssqlSink.pool.request();
-  closePlayers.forEach((playerId, index) => closeAlertRequest.input(`p${index}`, playerId));
-  await closeAlertRequest.query(
-    `UPDATE ${quoteMssqlIdent(mssqlSink.schema)}.${quoteMssqlIdent("ops_patron_alerts")}
-     SET status = 'CLOSED'
-     WHERE patron_source_player_id IN (${closeParams})
-       AND UPPER(status) = 'OPEN'`,
-  );
+  await mssqlSink.closeOpenAlertsForPlayers(closePlayers);
 
   if (pgSink) {
     await pgSink.ensureConnected();

@@ -57,18 +57,20 @@ node scripts/realtime-source-feeder.mjs \
   --max-events=2400
 ```
 
-The command writes one simulated customer event every 15 seconds. It stops
-when either 10 hours have elapsed or 2,400 events have been written. The three
-source systems are written as one logical customer event:
+The command starts one cycle every 15 seconds. Each cycle writes between one
+and the configured batch size of simulated customer events (maximum five). It
+stops when either 10 hours have elapsed or 2,400 events have been written. The
+three source systems are written as one logical customer event:
 
 - Oracle: gaming account, ratings, table session, round/bet signals;
 - MSSQL (`casino_ops.dbo`): `hotel_stays`, `responsible_play_cases`,
-  `host_assignments`, and risk-only `ops_patron_alerts`;
+  `host_assignments`, and risk-only `ops_patron_alerts_ai_ready`;
 - PostgreSQL: identity link, patron profile, app/POS/offer signals.
 
 The MSSQL initialization/rebuild package also creates the static reference
-tables `room_inventory`, `pr_agent_profiles`, and `ops_alert_rules`. The
-continuous feeder does not rewrite those three tables on every cycle.
+tables `room_inventory`, `pr_agent_profiles`, and `ops_alert_rules`, plus
+`host_assignments_ai_ready` and `responsible_play_cases_ai_ready`. The
+continuous feeder does not rewrite the three static tables on every cycle.
 
 ## 3. Parameter meaning
 
@@ -80,10 +82,15 @@ continuous feeder does not rewrite those three tables on every cycle.
 | `--active-limit` | `220` | Keeps the simulated live floor at no more than about 220 active customers. |
 | `--duration-hours` | `10` | Stops automatically after 10 hours. |
 | `--max-events` | `2400` | Stops automatically after 2,400 customer events. |
-| omitted `--batch-size` | default `1` | Writes one customer event per cycle for this command. |
+| omitted `--batch-size` | `.env` or default `1` | Uses `FEEDER_BATCH_SIZE`; each cycle writes a random number from 1 up to that value. |
 
 The feeder uses upserts and stable demo identifiers. Restarting it does not
 create a new database or delete the existing source records.
+
+If exactly one customer event per 15-second cycle is required, add
+`--batch-size=1`. Otherwise the process uses `FEEDER_BATCH_SIZE` from
+`.env.source-feeder` (capped at five) and chooses a random batch from one up to
+that value.
 
 ## 4. Run in the background
 
