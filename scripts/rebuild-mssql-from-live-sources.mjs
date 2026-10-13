@@ -8,6 +8,7 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 function loadEnv(file = ".env.source-feeder") {
@@ -26,6 +27,8 @@ loadEnv();
 
 const args = new Set(process.argv.slice(2));
 const writeEnabled = args.has("--write");
+const emitSqlArg = process.argv.find((arg) => arg.startsWith("--emit-sql="));
+const emitSqlPath = emitSqlArg ? emitSqlArg.slice("--emit-sql=".length) : "";
 const schema = process.env.MSSQL_SCHEMA || "dbo";
 const database = process.env.MSSQL_DATABASE || "casino_ops";
 const sourceSchema = process.env.PGSCHEMA || "casino_loyalty";
@@ -271,6 +274,54 @@ const DDL = [
   `IF OBJECT_ID(N'dbo.ops_alert_rules', N'U') IS NULL CREATE TABLE dbo.ops_alert_rules (rule_id NVARCHAR(64) NOT NULL PRIMARY KEY, name NVARCHAR(160) NULL, nl_description NVARCHAR(500) NULL, condition_logic NVARCHAR(32) NULL, conditions_json NVARCHAR(MAX) NULL, status NVARCHAR(32) NULL, total_triggered INT NULL, last_triggered_at DATETIME2 NULL, created_at DATETIME2 NULL);`,
 ];
 
+function sqlLiteral(value) {
+  if (value === null || value === undefined) return "NULL";
+  if (value instanceof Date) {
+    const iso = value.toISOString().replace("T", " ").replace("Z", "");
+    return `'${iso}'`;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return `N'${String(value).replaceAll("'", "''")}'`;
+}
+
+function renderInsertStatements(table, primaryKey, rows) {
+  if (!rows.length) return `-- No rows reconstructed for ${table}.`;
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  return rows.map((row) => {
+    const values = columns.map((column) => sqlLiteral(row[column])).join(", ");
+    const key = sqlLiteral(row[primaryKey]);
+    return `IF NOT EXISTS (SELECT 1 FROM ${sqlIdentifier(schema)}.${sqlIdentifier(table)} WHERE ${sqlIdentifier(primaryKey)}=${key})\nBEGIN\n  INSERT INTO ${sqlIdentifier(schema)}.${sqlIdentifier(table)} (${columns.map(sqlIdentifier).join(", ")}) VALUES (${values});\nEND\nGO`;
+  }).join("\n");
+}
+
+function renderSql(rows, statics) {
+  const lines = [
+    "-- Generated from the surviving Oracle and PostgreSQL demo sources.",
+    "-- This file is a manual SQL script. It does not connect to or modify those source databases.",
+    `IF DB_ID(N'${database.replaceAll("'", "''")}') IS NULL`,
+    "BEGIN",
+    `  CREATE DATABASE ${sqlIdentifier(database)};`,
+    "END",
+    "GO",
+    `USE ${sqlIdentifier(database)};`,
+    "GO",
+    ...DDL.flatMap((statement) => [statement, "GO"]),
+    "-- Static reference tables",
+    renderInsertStatements("room_inventory", "inventory_id", statics.rooms),
+    renderInsertStatements("pr_agent_profiles", "pr_agent_id", statics.agents),
+    renderInsertStatements("ops_alert_rules", "rule_id", statics.rules),
+    "-- Reconstructed rows keyed with REBUILT",
+    renderInsertStatements("hotel_stays", "stay_id", rows.hotel),
+    renderInsertStatements("responsible_play_cases", "case_id", rows.risks),
+    renderInsertStatements("host_assignments", "assignment_id", rows.assignments),
+    renderInsertStatements("ops_patron_alerts", "alert_id", rows.alerts),
+    "PRINT 'MSSQL casino_ops rebuild script completed.';",
+    "GO",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 async function connectMssql() {
   requiredEnv(["MSSQL_SERVER", "MSSQL_USER", "MSSQL_PASSWORD"]);
   const mssql = (await import("mssql")).default;
@@ -316,18 +367,35 @@ async function upsert(pool, table, primaryKey, record, columnsCache) {
 
 function staticRows(now) {
   const rooms = ["Executive Suite", "Fine Dining Voucher", "VIP Show Package", "Premium Suite", "Late Checkout", "Airport Transfer", "Spa Package", "Private Room", "Family Package", "Concert Ticket", "Tea Service", "Buffet Voucher", "Luxury Car", "Host Care", "Weekend Room"];
-  const rules = ["CONSECUTIVE_ROUNDS_BET_THRESHOLD", "ACTIVE_RISK_CASE", "HOST_SLA_OVERDUE", "OFFER_FATIGUE", "TABLE_OCCUPANCY_PRESSURE"];
+  const rules = [
+    ["RULE-RISK-001", "ACTIVE_RISK_CASE"],
+    ["RULE-HOST-001", "HOST_SLA_OVERDUE"],
+    ["RULE-REBUILT-003", "CONSECUTIVE_ROUNDS_BET_THRESHOLD"],
+    ["RULE-REBUILT-004", "OFFER_FATIGUE"],
+    ["RULE-REBUILT-005", "TABLE_OCCUPANCY_PRESSURE"],
+  ];
   return {
     rooms: rooms.map((roomType, index) => ({ inventory_id: `INV-REBUILT-${index + 1}`, room_type: roomType, available_count: 3 + (index % 9), upgrade_cost_hkd: 300 + index * 220, business_date: now, updated_at: now })),
     agents: HOSTS.map(([id, name], index) => ({ pr_agent_id: id, agent_name: name, preferred_languages: "en,zh", preferred_tiers: index % 2 ? "Gold,Platinum" : "Platinum,Diamond", preferred_games: "Baccarat,Blackjack", specialty_tags: index % 2 ? "HostCare,FollowUp" : "VIP,RiskReview", max_active_patrons: 8 + (index % 7), current_active_patrons: 3 + (index % 8), active: 1, last_assigned_at: now, created_at: now, updated_at: now })),
-    rules: Array.from({ length: 15 }, (_, index) => ({ rule_id: `RULE-REBUILT-${String(index + 1).padStart(3, "0")}`, name: rules[index % rules.length], nl_description: `Rebuilt demo alert rule ${index + 1}`, condition_logic: "ALL", conditions_json: json({ type: rules[index % rules.length], threshold: 10000 + index * 1000 }), status: "Active", total_triggered: 0, last_triggered_at: null, created_at: now })),
+    rules: Array.from({ length: 15 }, (_, index) => {
+      const [ruleId, ruleName] = rules[index % rules.length];
+      return { rule_id: index < rules.length ? ruleId : `RULE-REBUILT-${String(index + 1).padStart(3, "0")}`, name: ruleName, nl_description: `Rebuilt demo alert rule ${index + 1}`, condition_logic: "ALL", conditions_json: json({ type: ruleName, threshold: 10000 + index * 1000 }), status: "Active", total_triggered: 0, last_triggered_at: null, created_at: now };
+    }),
   };
 }
 
 async function main() {
   const source = await readSources();
   const people = reconstructPeople(source);
-  console.log(JSON.stringify({ mode: writeEnabled ? "write" : "dry-run", oracleAccounts: source.accounts.length, oracleSessions: source.sessions.length, postgresLinks: source.links.length, postgresProfiles: source.profiles.length, reconstructedPeople: people.length, activeOracleSessions: source.sessions.filter((row) => Number(row.IS_ACTIVE) === 1).length }));
+  const mode = emitSqlPath ? "emit-sql" : writeEnabled ? "write" : "dry-run";
+  console.log(JSON.stringify({ mode, oracleAccounts: source.accounts.length, oracleSessions: source.sessions.length, postgresLinks: source.links.length, postgresProfiles: source.profiles.length, reconstructedPeople: people.length, activeOracleSessions: source.sessions.filter((row) => Number(row.IS_ACTIVE) === 1).length }));
+  if (emitSqlPath) {
+    const output = path.resolve(emitSqlPath);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, renderSql(buildRows(people), staticRows(new Date())));
+    console.log(`Wrote SQL file: ${output}`);
+    return;
+  }
   if (!writeEnabled) return;
 
   const { pool, mssql } = await connectMssql();

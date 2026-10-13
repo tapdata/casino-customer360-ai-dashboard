@@ -25,6 +25,11 @@ The script creates `casino_ops` when it does not exist and creates any missing
 - `pr_agent_profiles`
 - `ops_alert_rules`
 
+These names deliberately match the existing `generate_full_seed_15plus.mjs`
+and `realtime-source-feeder.mjs` contracts. The rebuild adds nullable
+compatibility columns where the feeder already supports them; it does not
+rename or remove any of the existing table names.
+
 For each player found in the surviving Oracle accounts/sessions or PostgreSQL
 identity links/profiles, it derives:
 
@@ -60,6 +65,27 @@ PostgreSQL profiles:   1037
 Reconstructed players: 1038
 Active Oracle sessions: 231
 ```
+
+## Generate a manual SQL file
+
+If you want to review or execute the database changes yourself, generate a
+standalone SQL Server script instead of using `--write`:
+
+```bash
+node scripts/rebuild-mssql-from-live-sources.mjs \
+  --emit-sql=artifacts/seed-data/mssql_casino_ops_rebuilt_from_sources.sql
+```
+
+Open the generated file in SSMS or DBeaver and execute it as a script. It
+creates `casino_ops` if needed, creates the missing `dbo` tables, and inserts
+the reconstructed rows. Each insert is guarded by `IF NOT EXISTS` and uses a
+`REBUILT` key, so rerunning the file does not duplicate the generated rows.
+The Node command only reads Oracle/PostgreSQL while producing this file; the
+SQL file is the step that writes to SQL Server when you execute it manually.
+
+The generated SQL is intentionally ignored by Git because it contains a copy
+of the demo data. A colleague can regenerate the same file after configuring
+their own source credentials.
 
 After reviewing that output, explicitly enable the rebuild:
 
