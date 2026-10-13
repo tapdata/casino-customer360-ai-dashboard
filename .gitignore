@@ -50,6 +50,7 @@ yarn-error.log*
 /outputs/
 /work/
 /runtime/
+/.runtime/
 
 # generated demo artifacts and local working folders
 /artifacts/*

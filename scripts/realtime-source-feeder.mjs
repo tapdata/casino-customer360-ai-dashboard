@@ -829,6 +829,16 @@ class MssqlSink {
     return cols;
   }
 
+  async tableExists(table) {
+    return (await this.columns(table)).size > 0;
+  }
+
+  async upsertIfPresent(table, pk, record) {
+    if (!(await this.tableExists(table))) return false;
+    await this.upsert(table, pk, record);
+    return true;
+  }
+
   async upsert(table, pk, record) {
     await this.ensureConnected();
     const available = await this.columns(table);
@@ -1254,7 +1264,7 @@ async function writeSinkWithRetry(sink, person) {
         return false;
       }
       try {
-        console.warn(`${sink.sourceName} transient write issue (attempt ${attempt}/3); reconnecting.`);
+        console.warn(`${sink.sourceName} transient write issue (attempt ${attempt}/3): ${error.message}; reconnecting.`);
         await sink.reconnect();
       } catch (reconnectError) {
         console.warn(`${sink.sourceName} reconnect deferred: ${reconnectError.message}`);
