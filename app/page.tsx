@@ -1298,10 +1298,11 @@ export default function Home() {
   // Keep a checkpoint for every patron opened in the decision workspace so
   // the operations view can render the same persisted upgrade/session state.
   const [upgradeJourneys, setUpgradeJourneys] = useState<Record<string, UpgradeJourney>>({});
-  // The journey is persisted and advanced in the background. Its internal
-  // loading/error state is intentionally not exposed in the customer UI.
-  const [, setUpgradeLoading] = useState(false);
-  const [, setUpgradeError] = useState("");
+  // The journey is persisted and advanced in the background. Surface startup
+  // failures in the decision workspace so a missing Mongo configuration is
+  // actionable instead of looking like a missing demo effect.
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState("");
   const filterControlRef = useRef<HTMLDivElement>(null);
   const notificationControlRef = useRef<HTMLDivElement>(null);
   const pendingDecisionSelectionRef = useRef<string | null>(null);
@@ -1967,6 +1968,11 @@ export default function Home() {
         <button type="button" onClick={() => { setUpgradeError(""); setPrimaryView("operations"); }}>← {locale === "en" ? "Back to system menu" : locale === "zh-Hant" ? "返回系統選單" : "返回系统菜单"}</button>
         <span>{locale === "en" ? "Customer decision workspace" : locale === "zh-Hant" ? "客戶決策工作台" : "客户决策工作台"} · {snapshot.patronId}</span>
       </div>
+      {(upgradeLoading || upgradeError) && <div className={upgradeError ? "upgrade-demo-status error" : "upgrade-demo-status"} role={upgradeError ? "alert" : "status"}>
+        {upgradeError
+          ? `${locale === "en" ? "Upgrade journey unavailable" : locale === "zh-Hant" ? "升級旅程未啟動" : "升级旅程未启动"}: ${upgradeError}`
+          : (locale === "en" ? "Upgrade journey starting…" : locale === "zh-Hant" ? "升級旅程啟動中…" : "升级旅程启动中…")}
+      </div>}
 
       <section className="context-bar" aria-label={t.customerQueue}>
         <div className="vip-queue">

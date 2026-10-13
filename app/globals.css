@@ -887,6 +887,8 @@ body {
 /* V3 — menu-first product architecture and presentation-size typography */
 .decision-backbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 16px 0 4px; color: #79968a; font-size: 13px; }
 .decision-backbar button { border: 1px solid rgba(0, 237, 100, .25); border-radius: 8px; padding: 10px 14px; color: var(--mint-bright); background: rgba(0, 237, 100, .07); font-size: 12px; font-weight: 800; cursor: pointer; }
+.upgrade-demo-status { margin: 10px 0 4px; padding: 10px 14px; border: 1px solid #c8d7e0; border-radius: 8px; color: #315b72; background: #f5fbff; font-size: 12px; }
+.upgrade-demo-status.error { border-color: #e7b7b7; color: #9a2e2e; background: #fff6f6; }
 .product-console { margin-top: 16px; }
 .product-console .command-shell { grid-template-columns: 252px minmax(0, 1fr); min-height: 790px; }
 .product-console .command-sidebar { gap: 18px; padding: 24px 16px 18px; }

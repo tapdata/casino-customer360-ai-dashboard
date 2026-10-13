@@ -95,6 +95,7 @@ const CUSTOMER_TIER_ORDER: Record<string, number> = {
   Platinum: 4,
   Diamond: 5,
 };
+const DEMO_UPGRADE_START_TIERS = new Set(["Unclassified", "Bronze", "Silver", "Gold"]);
 
 function applyJourneyOverrides(patrons: LivePatron[], overrides?: JourneyOverrides) {
   if (!overrides || !Object.keys(overrides).length) return patrons;
@@ -1107,7 +1108,13 @@ export default function CommandCenter({
                   </div>
                 </div>
                 <div className="customer-filter-summary"><span>{filteredCustomerTotal.length} / {patrons.length}</span>{activeCustomerFilterCount > 0 && <button type="button" onClick={resetCustomerFilters}>{tx(locale, "清除筛选", "清除篩選", "Clear filters")} ×</button>}</div>
-                <div className="customer360-results">{filteredPatrons.length ? filteredPatrons.map((item) => <button type="button" key={item.patronId} className={selectedPatron?.patronId === item.patronId ? "active" : ""} onClick={() => setSelectedPatronId(item.patronId)}><span>{item.patronId.replace(/\D/g, "").slice(-2).padStart(2, "0")}</span><div><strong>{item.patronId}</strong><small>{item.maskedName} · {item.tier}</small></div><b className={item.activeRiskCount ? "risk" : item.activeSession ? "live" : ""}>{item.activeRiskCount ? "!" : item.activeSession ? "●" : "○"}</b></button>) : <div className="customer-filter-empty"><b>⌕</b><strong>{tx(locale, "没有匹配的客户", "沒有符合的客戶", "No matching patrons")}</strong><button type="button" onClick={resetCustomerFilters}>{tx(locale, "重置筛选条件", "重設篩選條件", "Reset filters")}</button></div>}</div>
+                <div className="customer360-results">{filteredPatrons.length ? filteredPatrons.map((item) => <button type="button" key={item.patronId} className={selectedPatron?.patronId === item.patronId ? "active" : ""} onClick={() => {
+                  setSelectedPatronId(item.patronId);
+                  // The demo story starts when a low-tier customer is opened.
+                  // Keep higher tiers available for inspection without forcing
+                  // them into the upgrade journey.
+                  if (DEMO_UPGRADE_START_TIERS.has(item.tier)) onOpenDecision?.(item.patronId);
+                }}><span>{item.patronId.replace(/\D/g, "").slice(-2).padStart(2, "0")}</span><div><strong>{item.patronId}</strong><small>{item.maskedName} · {item.tier}</small></div><b className={item.activeRiskCount ? "risk" : item.activeSession ? "live" : ""}>{item.activeRiskCount ? "!" : item.activeSession ? "●" : "○"}</b></button>) : <div className="customer-filter-empty"><b>⌕</b><strong>{tx(locale, "没有匹配的客户", "沒有符合的客戶", "No matching patrons")}</strong><button type="button" onClick={resetCustomerFilters}>{tx(locale, "重置筛选条件", "重設篩選條件", "Reset filters")}</button></div>}</div>
               </aside>
               {selectedPatron && selectedPatronRecommendation ? <article className="customer360-detail">
                 <div className="customer360-hero">
