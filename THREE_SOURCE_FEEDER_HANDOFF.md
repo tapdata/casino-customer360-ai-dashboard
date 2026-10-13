@@ -27,7 +27,7 @@ The source mapping is:
 | Source | Main data |
 | --- | --- |
 | Oracle `C##GAMING` | Players, tables, sessions, rounds, and bets |
-| MSSQL `dbo` | Hotel stays, host assignments, risk cases, and alerts |
+| MSSQL `dbo` | `hotel_stays`, `responsible_play_cases`, `host_assignments`, plus the AI-ready `host_assignments_ai_ready`, `responsible_play_cases_ai_ready`, and `ops_patron_alerts_ai_ready` tables |
 | PostgreSQL `casino_loyalty` | CRM profiles, identity links, app activity, POS/F&B, and offers |
 
 ## 2. First-time setup

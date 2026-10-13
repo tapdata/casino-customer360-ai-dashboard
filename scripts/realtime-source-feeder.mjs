@@ -845,6 +845,19 @@ class MssqlSink {
   }
 
   async write(person) {
+    const riskCaseId = person.risky ? `RPC-${person.playerId}-ACTIVE` : `RPC-${person.playerId}-CLOSED`;
+    const riskCase = {
+      case_id: riskCaseId,
+      guest_id: person.guestId,
+      player_id: person.playerId,
+      table_id: person.tableId,
+      risk_type: person.risky ? "ResponsiblePlayReview" : "None",
+      risk_score: person.risky ? 92 : 12,
+      status: person.risky ? "Active" : "Closed",
+      reason: person.risky ? "High wager velocity and card-counter-watch behavior; block incentive offers." : "No active responsible play case.",
+      created_at: person.created,
+      updated_at: person.created,
+    };
     await this.upsert("hotel_stays", "stay_id", {
       stay_id: `STAY-${person.guestId}-ACTIVE`,
       guest_id: person.guestId,
@@ -860,21 +873,25 @@ class MssqlSink {
       status: "CheckedIn",
       updated_at: person.created,
     });
-    await this.upsert("responsible_play_cases", "case_id", {
-      case_id: person.risky ? `RPC-${person.playerId}-ACTIVE` : `RPC-${person.playerId}-CLOSED`,
-      guest_id: person.guestId,
-      player_id: person.playerId,
-      risk_type: person.risky ? "ResponsiblePlayReview" : "None",
-      risk_score: person.risky ? 92 : 12,
-      status: person.risky ? "Active" : "Closed",
-      reason: person.risky ? "High wager velocity and card-counter-watch behavior; block incentive offers." : "No active responsible play case.",
-      created_at: person.created,
-      updated_at: person.created,
+    await this.upsert("responsible_play_cases", "case_id", riskCase);
+    await this.upsertIfPresent("responsible_play_cases_ai_ready", "case_id", {
+      case_id: riskCase.case_id,
+      patronId: person.masterPlayerId,
+      tableId: riskCase.table_id,
+      riskType: riskCase.risk_type,
+      riskScore: riskCase.risk_score,
+      riskLevel: riskCase.risk_score >= 80 ? "High" : riskCase.risk_score >= 50 ? "Medium" : riskCase.risk_score > 0 ? "Low" : "Normal",
+      status: riskCase.status,
+      reasoningAssessment: JSON.stringify({ summary: riskCase.reason, source: "MSSQL.responsible_play_cases" }),
+      adminReview: JSON.stringify({ status: riskCase.status, reviewedBy: "ADM-01" }),
+      timeline: JSON.stringify([{ node: "case_created", at: person.created.toISOString() }]),
+      createdAt: riskCase.created_at,
+      updatedAt: riskCase.updated_at,
     });
     if (!person.risky) {
       await this.closeActiveRiskForPlayer(person.playerId);
     }
-    await this.upsert("host_assignments", "assignment_id", {
+    const assignment = {
       assignment_id: `HA-${person.playerId}`,
       guest_id: person.guestId,
       player_id: person.playerId,
@@ -889,6 +906,21 @@ class MssqlSink {
       accepted_at: null,
       completed_at: null,
       updated_at: person.created,
+    };
+    await this.upsert("host_assignments", "assignment_id", assignment);
+    await this.upsertIfPresent("host_assignments_ai_ready", "assignment_id", {
+      assignment_id: assignment.assignment_id,
+      patronId: person.masterPlayerId,
+      prAgentId: assignment.pr_agent_id || assignment.host_id,
+      caseId: assignment.case_id,
+      status: assignment.status || assignment.assignment_status,
+      fitScore: assignment.fit_score,
+      active: assignment.active,
+      assignedAt: assignment.assigned_at,
+      acceptedAt: assignment.accepted_at,
+      completedAt: assignment.completed_at,
+      agentSnapshot: JSON.stringify({ name: assignment.host_name, source: "MSSQL.host_assignments" }),
+      updatedAt: assignment.updated_at,
     });
     if (person.risky) {
       const rawAlert = {
@@ -984,6 +1016,37 @@ class MssqlSink {
     }
   }
 
+  async closeAiReadyRiskCasesForPlayers(playerIds) {
+    const ids = playerIds.map(String).filter(Boolean);
+    if (!ids.length || !(await this.tableExists("responsible_play_cases_ai_ready"))) return;
+    const request = this.pool.request();
+    const patronIds = ids.map((playerId) => `P${pad(playerId, 10)}`);
+    patronIds.forEach((patronId, index) => request.input(`risk${index}`, patronId));
+    await request.query(
+      `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("responsible_play_cases_ai_ready")}
+       SET status = 'Closed',
+           riskLevel = CASE WHEN riskScore > 20 THEN 'Low' ELSE riskLevel END,
+           updatedAt = SYSDATETIME()
+       WHERE patronId IN (${patronIds.map((_, index) => `@risk${index}`).join(",")})
+         AND UPPER(status) = 'ACTIVE'`,
+    );
+  }
+
+  async closeAiReadyRiskCasesForRange(range) {
+    if (!range || !(await this.tableExists("responsible_play_cases_ai_ready"))) return;
+    const request = this.pool.request();
+    request.input("startPlayerId", String(range.start));
+    request.input("endPlayerId", String(range.end));
+    await request.query(
+      `UPDATE ${quoteMssqlIdent(this.schema)}.${quoteMssqlIdent("responsible_play_cases_ai_ready")}
+       SET status = 'Closed',
+           riskLevel = CASE WHEN riskScore > 20 THEN 'Low' ELSE riskLevel END,
+           updatedAt = SYSDATETIME()
+       WHERE TRY_CONVERT(INT, SUBSTRING(patronId, 2, 10)) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)
+         AND UPPER(status) = 'ACTIVE'`,
+    );
+  }
+
   async closeActiveRiskForPlayer(playerId) {
     await this.ensureConnected();
     const closeCase = this.pool.request();
@@ -998,6 +1061,7 @@ class MssqlSink {
          AND status = 'Active'`,
     );
 
+    await this.closeAiReadyRiskCasesForPlayers([playerId]);
     await this.closeOpenAlertsForPlayers([playerId]);
   }
 
@@ -1015,6 +1079,7 @@ class MssqlSink {
        WHERE TRY_CONVERT(INT, player_id) BETWEEN TRY_CONVERT(INT, @startPlayerId) AND TRY_CONVERT(INT, @endPlayerId)`,
     );
 
+    await this.closeAiReadyRiskCasesForRange(range);
     await this.closeOpenAlertsForRange(range);
     console.log(`Closed MSSQL risk cases and alerts for player range ${range.start}-${range.end}.`);
   }
@@ -1145,6 +1210,7 @@ async function maintainRiskRatio(sinks) {
        AND UPPER(status) = 'ACTIVE'`,
   );
 
+  await mssqlSink.closeAiReadyRiskCasesForPlayers(closePlayers);
   await mssqlSink.closeOpenAlertsForPlayers(closePlayers);
 
   if (pgSink) {

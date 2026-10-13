@@ -135,7 +135,13 @@ MSSQL writes:
 - `hotel_stays`
 - `responsible_play_cases`
 - `host_assignments`
-- `ops_patron_alerts` for risk scenarios
+- `host_assignments_ai_ready`
+- `responsible_play_cases_ai_ready`
+- `ops_patron_alerts_ai_ready` for risk scenarios
+
+For compatibility with older MSSQL layouts, the feeder also updates the raw
+`ops_patron_alerts` table when that table exists. The nine-table demo layout
+uses the three `*_ai_ready` tables for direct TapData CDC/API tasks.
 
 PostgreSQL writes:
 
