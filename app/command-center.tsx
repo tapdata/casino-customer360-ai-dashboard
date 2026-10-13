@@ -2,6 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readLivePatronSnapshot, writeLivePatronSnapshot } from "./live-patron-cache";
+import { demoPatrons, demoSessions } from "./api/ai/chat/demo-data";
 
 type Locale = "zh-Hans" | "zh-Hant" | "en";
 type Experience = "moment" | "floor" | "campaign" | "risk";
@@ -149,6 +150,34 @@ type SourceCounts = {
   offer_recommendations: number;
   chat_messages: number;
 };
+
+const CLIENT_DEMO_SOURCE_COUNTS: SourceCounts = {
+  patron_profiles: demoPatrons.length,
+  patron_table_sessions: demoSessions.length,
+  patron_risk_cases: 4,
+  offer_recommendations: 4,
+  chat_messages: 3,
+};
+
+function clientDemoPatronSnapshot() {
+  const sessionByPatron = new Map(demoSessions.map((session) => [session.patronId, session]));
+  return demoPatrons.map((patron): LivePatron => {
+    const session = sessionByPatron.get(patron.patronId);
+    return {
+      ...patron,
+      activeSession: session ? {
+        tableId: session.tableId,
+        seatedAt: session.seatedAt,
+        lastActionAt: session.lastActionAt,
+        sessionBetAmount: session.sessionBetAmount,
+        currentStackEstimate: session.currentStackEstimate,
+        behaviorTags: session.behaviorTags,
+        isActive: session.isActive,
+      } : null,
+      activeRiskCount: patron.riskFlags.length ? 1 : 0,
+    };
+  });
+}
 
 type PatronRecommendation = {
   title: string;
@@ -571,7 +600,9 @@ export default function CommandCenter({
   const [customerTag, setCustomerTag] = useState("all");
   const customerFilterRef = useRef<HTMLDivElement>(null);
   const [patrons, setPatrons] = useState<LivePatron[]>([]);
+  const patronsRef = useRef<LivePatron[]>([]);
   const [sourceCounts, setSourceCounts] = useState<SourceCounts | null>(null);
+  const [dataMode, setDataMode] = useState<DataMode>("live");
   const [dataError, setDataError] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -619,6 +650,7 @@ export default function CommandCenter({
   useEffect(() => {
     const cached = readLivePatronSnapshot<LivePatron, SourceCounts>();
     if (!cached) return;
+    patronsRef.current = cached.data;
     setPatrons(cached.data);
     if (cached.sourceCounts) setSourceCounts(cached.sourceCounts);
     if (cached.fetchedAt) setLastUpdatedAt(new Date(cached.fetchedAt));
@@ -632,6 +664,23 @@ export default function CommandCenter({
     setRefreshing(true);
     const controller = new AbortController();
     const requestTimer = window.setTimeout(() => controller.abort(), 15_000);
+    const useClientDemoFallback = () => {
+      if (refreshSequenceRef.current !== requestSequence || patronsRef.current.length) return;
+      const demoPatronsSnapshot = applyJourneyOverrides(clientDemoPatronSnapshot(), journeyOverridesRef.current);
+      patronsRef.current = demoPatronsSnapshot;
+      setPatrons(demoPatronsSnapshot);
+      setSourceCounts(CLIENT_DEMO_SOURCE_COUNTS);
+      setDataMode("demo");
+      setDataError("");
+      setCacheState("miss");
+      setLastUpdatedAt(new Date());
+      livePatronsLoadedRef.current?.(demoPatronsSnapshot, CLIENT_DEMO_SOURCE_COUNTS, "demo");
+      setSelectedPatronId((current) => current || demoPatronsSnapshot[0]?.patronId || patronId);
+    };
+    // The public demo must remain useful even when a remote TapData endpoint
+    // hangs instead of rejecting. Show the bundled anonymized snapshot after
+    // a short grace period, then let the live request replace it if it recovers.
+    const demoFallbackTimer = window.setTimeout(useClientDemoFallback, 4_000);
     try {
       const response = await fetch("/api/data/patrons", {
         headers: { accept: "application/json" },
@@ -648,14 +697,18 @@ export default function CommandCenter({
       // snapshot. Keep the last good data visible instead of clearing the
       // queue on a polling tick; the next refresh will retry automatically.
       if (!result.data.length) {
+        useClientDemoFallback();
+        if (patronsRef.current.length) return;
         setDataError(result.warnings?.[0]?.message || "TapData returned 0 live patrons in this refresh; keeping the last good snapshot");
         return;
       }
       const nextPatrons = applyJourneyOverrides(result.data, journeyOverridesRef.current);
+      patronsRef.current = nextPatrons;
       setPatrons(nextPatrons);
       writeLivePatronSnapshot(nextPatrons, result.sourceCounts, result.fetchedAt);
       livePatronsLoadedRef.current?.(nextPatrons, result.sourceCounts || null, result.mode || "live");
       setSourceCounts(result.sourceCounts || null);
+      setDataMode(result.mode || "live");
       setDataError("");
       setCacheState(result.cacheState || "miss");
       setLastUpdatedAt(result.fetchedAt ? new Date(result.fetchedAt) : new Date());
@@ -671,6 +724,8 @@ export default function CommandCenter({
       });
     } catch (error) {
       if (refreshSequenceRef.current === requestSequence) {
+        useClientDemoFallback();
+        if (patronsRef.current.length) return;
         const message = error instanceof Error && error.name === "AbortError"
           ? tx(locale, "接口超过 15 秒未返回，已放弃本轮刷新，3 秒后自动重试。", "接口超過 15 秒未返回，已放棄本輪刷新，3 秒後自動重試。", "The API did not return within 15s; this refresh was aborted and will retry in 3s.")
           : error instanceof Error ? error.message : "Unable to load live data";
@@ -678,6 +733,7 @@ export default function CommandCenter({
       }
     } finally {
       window.clearTimeout(requestTimer);
+      window.clearTimeout(demoFallbackTimer);
       refreshInFlightRef.current = false;
       setRefreshing(false);
     }
@@ -979,7 +1035,7 @@ export default function CommandCenter({
               </button>
             ))}
           </div>
-          <div className={`gateway-status ${dataError ? "error" : patrons.length ? "live" : "idle"}`}><span /><div><strong>{dataError ? "DATA GATEWAY ERROR" : patrons.length ? "TAPDATA API LIVE" : "CONNECTING"}</strong><small>{sourceCounts ? `${sourceCounts.patron_table_sessions} SESSION ROWS` : tx(locale, "只读数据层", "唯讀數據層", "Read-only data layer")}</small></div></div>
+          <div className={`gateway-status ${dataError ? "error" : patrons.length ? "live" : "idle"}`}><span /><div><strong>{dataError ? "DATA GATEWAY ERROR" : patrons.length ? dataMode === "demo" ? "LOCAL DEMO DATA" : "TAPDATA API LIVE" : "CONNECTING"}</strong><small>{sourceCounts ? `${sourceCounts.patron_table_sessions} SESSION ROWS` : tx(locale, "只读数据层", "唯讀數據層", "Read-only data layer")}</small></div></div>
         </nav>
 
         <div className="command-main">
@@ -1056,7 +1112,7 @@ export default function CommandCenter({
               {selectedPatron && selectedPatronRecommendation ? <article className="customer360-detail">
                 <div className="customer360-hero">
                   <div className="customer-avatar">{selectedPatron.patronId.replace(/\D/g, "").slice(-2).padStart(2, "0")}</div>
-                  <div><span>LIVE CUSTOMER PROFILE</span><h3>{selectedPatron.maskedName}</h3><p>{selectedPatron.patronId} · {selectedPatron.tier} · {selectedPatron.region}</p></div>
+                  <div><span>{dataMode === "demo" ? "DEMO CUSTOMER PROFILE" : "LIVE CUSTOMER PROFILE"}</span><h3>{selectedPatron.maskedName}</h3><p>{selectedPatron.patronId} · {selectedPatron.tier} · {selectedPatron.region}</p></div>
                   <button type="button" onClick={() => onOpenDecision?.(selectedPatron.patronId)}>{tx(locale, "进入审批工作台", "進入審批工作台", "Open approval workspace")} →</button>
                 </div>
                 <div className="customer360-score">
