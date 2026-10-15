@@ -49,6 +49,11 @@ type JourneyDoc = {
 };
 
 let clientPromise: Promise<MongoClient> | null = null;
+const memoryJourneys = new Map<string, JourneyDoc>();
+
+function useMemoryJourneyStore() {
+  return process.env.MONGO_DEMO_JOURNEY_MEMORY_FALLBACK === "true";
+}
 
 function mongoUri() {
   if (process.env.MONGO_AUDIT_URI) return process.env.MONGO_AUDIT_URI;
@@ -217,18 +222,18 @@ export async function POST(request: Request) {
   if (!patronId) return errorResponse("patronId is required", 400);
 
   try {
-    const collection = await journeyCollection();
-    if (!collection) return errorResponse("Mongo persistence is not configured", 503);
+    const memoryMode = useMemoryJourneyStore();
+    const collection = memoryMode ? null : await journeyCollection();
+    if (!collection && !memoryMode) return errorResponse("Mongo persistence is not configured", 503);
     // Re-entry looks up the newest checkpoint for one patron. Keep that query
     // covered by an index whose sort fields are adjacent; the older
     // patron/status index is no longer sufficient once completed journeys are
     // resumed as well.
-    await collection.createIndex({ patronId: 1, updatedAt: -1 });
+    if (collection) await collection.createIndex({ patronId: 1, updatedAt: -1 });
     const now = Date.now();
-    const latest = await collection.findOne(
-      { patronId },
-      { sort: { updatedAt: -1 } },
-    );
+    const latest = memoryMode
+      ? memoryJourneys.get(patronId) || null
+      : await collection!.findOne({ patronId }, { sort: { updatedAt: -1 } });
     // A completed journey is the durable result of the demo. Re-entering the
     // workspace must restore that result instead of silently resetting the
     // customer to Gold. A new run is opt-in through restart=true.
@@ -248,8 +253,9 @@ export async function POST(request: Request) {
         behaviorTags: latest.behaviorTags?.length ? latest.behaviorTags : (body.behaviorTags || []),
       };
       const advanced = advance(merged, now);
-      await persistAdvance(collection, advanced);
-      return Response.json({ ok: true, journey: publicJourney(advanced, now), persisted: true, resumed: true });
+      if (memoryMode) memoryJourneys.set(patronId, advanced);
+      else await persistAdvance(collection, advanced);
+      return Response.json({ ok: true, journey: publicJourney(advanced, now), persisted: !memoryMode, persistence: memoryMode ? "memory" : "mongo", resumed: true });
     }
 
     const startedAt = new Date(now).toISOString();
@@ -279,8 +285,9 @@ export async function POST(request: Request) {
       behaviorTags: Array.isArray(body.behaviorTags) ? body.behaviorTags.filter((tag): tag is string => typeof tag === "string").slice(0, 8) : [],
       currentStackEstimate: finiteNonNegative(body.currentStackEstimate),
     };
-    await collection.insertOne(journey);
-    return Response.json({ ok: true, journey: publicJourney(journey, now), persisted: true });
+    if (memoryMode) memoryJourneys.set(patronId, journey);
+    else await collection!.insertOne(journey);
+    return Response.json({ ok: true, journey: publicJourney(journey, now), persisted: !memoryMode, persistence: memoryMode ? "memory" : "mongo" });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : "Mongo persistence failed", 503);
   }
@@ -290,14 +297,18 @@ export async function GET(request: Request) {
   const patronId = new URL(request.url).searchParams.get("patronId")?.trim();
   if (!patronId) return errorResponse("patronId is required", 400);
   try {
-    const collection = await journeyCollection();
-    if (!collection) return errorResponse("Mongo persistence is not configured", 503);
-    const doc = await collection.findOne({ patronId }, { sort: { updatedAt: -1 } });
-    if (!doc) return Response.json({ ok: true, journey: null, persisted: true });
+    const memoryMode = useMemoryJourneyStore();
+    const collection = memoryMode ? null : await journeyCollection();
+    if (!collection && !memoryMode) return errorResponse("Mongo persistence is not configured", 503);
+    const doc = memoryMode
+      ? memoryJourneys.get(patronId) || null
+      : await collection!.findOne({ patronId }, { sort: { updatedAt: -1 } });
+    if (!doc) return Response.json({ ok: true, journey: null, persisted: !memoryMode, persistence: memoryMode ? "memory" : "mongo" });
     const now = Date.now();
     const advanced = advance(doc, now);
-    await persistAdvance(collection, advanced);
-    return Response.json({ ok: true, journey: publicJourney(advanced, now), persisted: true });
+    if (memoryMode) memoryJourneys.set(patronId, advanced);
+    else await persistAdvance(collection, advanced);
+    return Response.json({ ok: true, journey: publicJourney(advanced, now), persisted: !memoryMode, persistence: memoryMode ? "memory" : "mongo" });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : "Mongo persistence failed", 503);
   }
